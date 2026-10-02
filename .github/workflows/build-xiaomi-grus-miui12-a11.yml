@@ -154,16 +154,17 @@ jobs:
 
           # --- SukiSU builtin sulog bug ---
           # With CONFIG_KSU_SUSFS *unset*, the in-tree ksu_sulog_capture()
-          # takes `const struct user_arg_ptr argv` BY VALUE (event.c:289),
-          # yet USER_ARG_NULL expands to user_arg_null_ptr() which is a
-          # POINTER (event.c:377). clang:
-          #   passing 'struct user_arg_ptr *' to parameter of incompatible
-          #   type 'struct user_arg_ptr'; dereference with *
-          # The SUSFS variant (event.c:174) wants the pointer, the non-SUSFS
-          # variant wants the value; we build non-SUSFS, so dereference.
+          # takes `const struct user_arg_ptr argv` BY VALUE (event.c:289), while
+          # this tree also defines USER_ARG_NULL as a POINTER:
+          #   event.c:379  ksu_sulog_capture(... USER_ARG_NULL, gfp);
+          # clang: passing 'struct user_arg_ptr *' to parameter of incompatible
+          # type 'struct user_arg_ptr'; dereference with *
+          # Dereference AT THE CALL SITE so this works no matter which variant
+          # of USER_ARG_NULL the fetched SukiSU tree carries
+          # (user_arg_null_ptr() or (&(struct user_arg_ptr){ 0 })).
           # Harmless: GRANT_ROOT sets should_skip_copy and never reads argv.
           echo "[+] Fixing SukiSU sulog USER_ARG_NULL for non-SUSFS build"
-          sed -i 's/#define USER_ARG_NULL user_arg_null_ptr()/#define USER_ARG_NULL (*user_arg_null_ptr())/' drivers/kernelsu/sulog/event.c
+          sed -i 's/USER_ARG_NULL, gfp)/*(USER_ARG_NULL), gfp)/' drivers/kernelsu/sulog/event.c
           grep -n "USER_ARG_NULL" drivers/kernelsu/sulog/event.c || true
 
       - name: 🧰 Patch Kernel of Re:Kernel
