@@ -1,0 +1,210 @@
+name: Build Lenovo Z6 Lite / K10 Note (kunlun2) - DEAN native KSU v2 (module ABI)
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+env:
+  DEVICE_NAME: "lenovo_kunlun2"
+  DEVICE_CODENAME: "kunlun2"
+
+  CUSTOM_CMDS: "CLANG_TRIPLE=aarch64-linux-gnu-"
+  EXTRA_CMDS: "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/clang-custom/lib64"
+
+  # deanlancer/msm-4.9-kunlun2 @ android-s ships the old non-GKI KernelSU manual
+  # hooks baked into the source (fs/open.c:376 ksu_handle_faccessat,
+  # fs/stat.c:99 ksu_handle_stat, fs/exec.c:1692 ksu_handle_execveat,
+  # drivers/input/input.c:386 ksu_handle_input_handle_event) with NO #ifdef, so
+  # clean_hook.sh cannot strip them -> the matching driver is REQUIRED.
+  # SukiSU v4.2.0 cannot compile on 4.9 (policy/app_profile.c uses struct
+  # seccomp members mode/filter that only exist in 4.14+), so we put the tree's
+  # own drivers/kernelsu back after build-ready installed SukiSU.
+  #
+  # v2 adds the module-ABI fixes needed for THIS device's stock vendor modules:
+  #   stock uname  = 4.9.186-perf+
+  #   vendor .ko vermagic = "4.9.186-perf+ SMP preempt mod_unload modversions aarch64"
+  #   the tree is 4.9.337 and its defconfig sets LOCALVERSION="-Vympel-B", which
+  #   made every one of the 34 /vendor/lib/modules/*.ko refuse to load
+  #   ("disagrees about version of symbol" / version magic mismatch) -> Android
+  #   never reached adbd and the phone fell back to EDL.
+  KERNEL_SOURCE: "https://github.com/deanlancer/msm-4.9-kunlun2.git"
+  KERNEL_BRANCH: "android-s"
+
+  CLANG_SOURCE: "https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b.git"
+  CLANG_BRANCH: "lineage-20.0"
+
+  GCC_GNU: false
+  GCC_64_SOURCE: "https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git"
+  GCC_64_BRANCH: "lineage-19.1"
+  GCC_32_SOURCE: "https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9.git"
+  GCC_32_BRANCH: "lineage-19.1"
+
+  DEFCONFIG_SOURCE: ""
+  DEFCONFIG_NAME: "kunlun2_defconfig"
+  DEFCONFIG_ORIGIN_IMAGE: ""
+  DEFCONFIG_FROM_BOOT: false
+
+  KERNELSU_SOURCE: ""
+  KERNELSU_BRANCH: ""
+  KERNELSU_AUTO_GET: "true"
+  KERNELSU_AUTO_FORK: "sukisu"
+  KERNELSU_METHOD: "shell"
+
+  SUSFS_ENABLE: false
+  SUSFS_FIXED: false
+  SUSFS_FOLDER_FIXED: ""
+  SUSFS_PATCH_FIXED: ""
+
+  AK3_SOURCE: "https://github.com/osm0sis/AnyKernel3.git"
+  AK3_BRANCH: "master"
+
+  BOOT_SOURCE: ""
+
+  NEED_DTBO: false
+  NEED_SAFE_DTBO: false
+
+  ROM_TEXT: "dean4"
+
+  PYTHON_VERSION: "3"
+
+  PACK_METHOD: "AnyKernel3"
+  PACK_KMODULES: "true"
+
+  PATCHES_SOURCE: "author/source"
+  PATCHES_BRANCH: "branch"
+
+  REKERNEL_ENABLE: "false"
+  DROIDSPACES_ENABLE: "false"
+  NOMOUNT_ENABLE: "false"
+
+  HOOK_METHOD: "syscall"
+
+  KPM_ENABLE: "false"
+  KPM_INLINE: "false"
+  KPM_KPATCH_NEXT: "false"
+  KPM_PATCH_SOURCE: "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU_patch/refs/heads/main/kpm/patch_linux"
+
+  BASEBAND_GUARD_ENABLE: "false"
+  BASEBAND_GUARD_BOOT: "false"
+
+  GENERATE_DTB: "false"
+  GENERATE_CHIP: "qcom"
+
+  BUILD_DEBUGGER: "false"
+  SKIP_PATCH: "false"
+
+  BUILD_OTHER_CONFIG: "false"
+  MERGE_CONFIG_FILES: ""
+
+  FREE_MORE_SPACE: "false"
+
+jobs:
+  build-kernel:
+    name: Lenovo kunlun2 DEAN native KSU v2
+    runs-on: ubuntu-24.04
+    env:
+      CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_HARDLINK: "true"
+
+    steps:
+      - name: ⏰ Checkout repository
+        uses: actions/checkout@v6
+
+      - name: ⌛️ Compilation environment preparation
+        uses: ./.github/workflows/build-env
+
+      - name: ⚙️ Get necessary tools
+        uses: ./.github/workflows/build-ready
+
+      - name: 🪛 Extra Kernel Options
+        run: |
+          cd $GITHUB_WORKSPACE/device_kernel
+          D=arch/arm64/configs/kunlun2_defconfig
+
+          # --- 1. put the tree's OWN KernelSU driver back ------------------
+          echo "[-] current drivers/kernelsu:"; ls -la drivers/kernelsu 2>/dev/null | head -5 || true
+          rm -rf drivers/kernelsu
+          git checkout -- drivers/kernelsu
+          echo "[+] restored dean in-tree driver:"; ls drivers/kernelsu | head -20
+          if [ ! -f drivers/kernelsu/sucompat.c ]; then echo "[-] restore failed"; exit 1; fi
+          grep -q 'ksu_handle_faccessat' drivers/kernelsu/sucompat.c && echo "[+] sucompat defines the tree hook symbols"
+          grep -q 'kernelsu' drivers/Makefile && echo "[+] drivers/Makefile already lists kernelsu"
+
+          # --- 2. KernelSU on, vanilla-off --------------------------------
+          echo "CONFIG_KSU=y" >> $D
+          echo "# CONFIG_KSU_DEBUG is not set" >> $D
+
+          # --- 3. MODULE ABI: make the stock vendor modules load -----------
+          # (a) release string: stock is "4.9.186-perf+"
+          echo "[before] $(head -4 Makefile | tr '\n' ' ')"
+          sed -i 's/^SUBLEVEL = .*/SUBLEVEL = 186/' Makefile
+          sed -i 's/^EXTRAVERSION =.*/EXTRAVERSION =/' Makefile
+          echo "[after ] $(head -4 Makefile | tr '\n' ' ')"
+          echo 'CONFIG_LOCALVERSION="-perf"' >> $D
+          # (b) our keyring does not hold the stock signing key: a forced
+          #     signature check rejects every vendor module
+          echo "# CONFIG_MODULE_SIG is not set" >> $D
+          # (c) a rebased 4.9.337 source cannot reproduce the stock genksyms
+          #     CRCs, so drop the CRC check ...
+          echo "# CONFIG_MODVERSIONS is not set" >> $D
+          # ... and keep "modversions" inside VERMAGIC_STRING so the modules
+          #     still pass the version-magic gate
+          sed -i 's|^# define MODULE_VERMAGIC_MODVERSIONS ""|# define MODULE_VERMAGIC_MODVERSIONS "modversions "|' include/linux/vermagic.h
+          grep -n 'MODULE_VERMAGIC_MODVERSIONS' include/linux/vermagic.h
+          # (d) stock kernel has APPENDED_DTB off: the bootloader hands the
+          #     kernel the dtb block from boot + the dtbo partition overlays.
+          #     An appended dtb would shadow those and lose the device tree.
+          echo "# CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE is not set" >> $D
+          echo "# CONFIG_BUILD_ARM64_DT_OVERLAY is not set" >> $D
+
+          # --- 4. host toolchain fixes ------------------------------------
+          sed -i '/KBUILD_CFLAGS   :=/s//& -w/' Makefile
+          echo "KBUILD_HOSTCFLAGS += -fcommon" >> Makefile
+          echo "HOSTCFLAGS += -fcommon" >> Makefile
+          sed -i 's/^KBUILD_DTBS.*/KBUILD_DTBS :=/' arch/arm64/Makefile
+          grep -n '^KBUILD_DTBS' arch/arm64/Makefile || true
+
+          # --- 5. 32-bit vDSO fix -----------------------------------------
+          echo "# CONFIG_COMPAT_VDSO is not set" >> $D
+          grep -n 'COMPAT_VDSO' $D || true
+          echo "=== $D tail ==="; tail -20 $D
+
+      - name: 🚀 Build Process
+        uses: ./.github/workflows/build-process
+
+      - name: 📋 Dump effective kernel config + module ABI
+        if: always()
+        run: |
+          cd $GITHUB_WORKSPACE
+          cp device_kernel/out/.config kunlun2_dean4.config 2>/dev/null || echo "no .config"
+          find device_kernel/out -name '*.ko' 2>/dev/null | sort > kunlun2_dean4_modules.txt || true
+          echo "[+] .ko count: $(wc -l < kunlun2_dean4_modules.txt)"
+          echo "=== config check ==="
+          grep -E '^CONFIG_MODULES=|^CONFIG_MODULE_SIG|^CONFIG_MODVERSIONS|^CONFIG_LOCALVERSION|^CONFIG_KSU|COMPAT_VDSO|APPENDED_DTB|DT_OVERLAY' kunlun2_dean4.config || true
+          echo "=== kernel release ==="
+          cat device_kernel/out/include/config/kernel.release 2>/dev/null || cat device_kernel/include/config/kernel.release 2>/dev/null || echo "(no kernel.release)"
+          echo "=== VERMAGIC actually compiled into Image ==="
+          ls -la device_kernel/out/arch/arm64/boot/ 2>/dev/null | head
+          grep -a -o -m1 '4\.9\.[0-9][^ ]* SMP [ -~]*mod_unload[ -~]*' device_kernel/out/arch/arm64/boot/Image 2>/dev/null || echo "(no Image yet)"
+          echo "=== Module.symvers (exported symbols our kernel offers) ==="
+          find device_kernel -name Module.symvers 2>/dev/null | head
+          find device_kernel -name Module.symvers -exec cp {} "$GITHUB_WORKSPACE/kunlun2_dean4-symvers.txt" \; 2>/dev/null || true
+          wc -l "$GITHUB_WORKSPACE/kunlun2_dean4-symvers.txt" 2>/dev/null || true
+
+      - name: 📤 Upload config diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kunlun2-dean4-config
+          path: |
+            kunlun2_dean4.config
+            kunlun2_dean4_modules.txt
+            kunlun2_dean4-symvers.txt
+          if-no-files-found: warn
+
+      - name: 🔩 Pack Process
+        uses: ./.github/workflows/pack-process
+
+      - name: ✏️ Upload Artifacts
+        uses: ./.github/workflows/upload-files
