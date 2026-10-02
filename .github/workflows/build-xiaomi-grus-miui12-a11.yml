@@ -138,6 +138,18 @@ jobs:
 
           echo "CONFIG_KSU=y" >> ./arch/arm64/configs/grus_defconfig
           echo "CONFIG_KSU_TAMPER_SYSCALL_TABLE=y" >> ./arch/arm64/configs/grus_defconfig
+          # --- SUSFS must REALLY be off ---
+          # The factory's "Set KSU and SUSFS for DEFCONFIG" step appends
+          #   CONFIG_KSU_SUSFS=n
+          # but kconfig silently ignores that spelling; only
+          # "# CONFIG_X is not set" actually turns a symbol off. Without it
+          # SukiSU's kernel/Kconfig (config KSU_SUSFS / default y) leaves SUSFS
+          # ENABLED, so kernel_includes.h:77 pulls in the nonexistent header:
+          #   drivers/kernelsu/kernel_includes.h:77: fatal error:
+          #   'linux/susfs.h' file not found
+          echo "[+] Explicitly disabling CONFIG_KSU_SUSFS"
+          echo "# CONFIG_KSU_SUSFS is not set" >> ./arch/arm64/configs/grus_defconfig
+          tail -4 ./arch/arm64/configs/grus_defconfig
 
           sed -i 's/^static DEFINE_RWLOCK(policy_rwlock);$/DEFINE_RWLOCK(policy_rwlock);/' security/selinux/ss/services.c
           sed -i '/KBUILD_CFLAGS   :=/s//& -w/' Makefile
@@ -184,14 +196,32 @@ jobs:
           # only exist in the full grus.dts overlay ->
           #   grus-sdm710.dtsi:465.1-11 Label or path smb1355_0 not found
           #   FATAL ERROR: Syntax error parsing input tree
-          # The device ships a real dtbo partition, so the stock build takes the
-          # CONFIG_BUILD_ARM64_DT_OVERLAY=y branch (grus.dtb + overlay) and never
-          # builds those two standalone DTBs. Mirror that, and also neuter the
-          # else-branch list so the broken targets disappear either way.
-          echo "[+] Building DTBs the way the device does (DT_OVERLAY)"
-          echo "CONFIG_BUILD_ARM64_DT_OVERLAY=y" >> arch/arm64/configs/grus_defconfig
+          # Do NOT switch on CONFIG_BUILD_ARM64_DT_OVERLAY: that branch also
+          # wants a dtbo.img, and this tree's scripts/dtbTool is a python2
+          # script (runner has no python2) ->
+          #   /bin/sh: 1: python2: not found  (arch/arm64/boot/Makefile:73)
+          # The kernel's DTB is unused anyway: repack_boot.py keeps the stock
+          # dtb block from the phone's own boot image. So just empty the two
+          # broken targets out of the else-branch list.
+          echo "[+] Neutering the two unbuildable grus DTBs"
           sed -i -e 's|^\(\s*\)grus-sdm710\.dtb *\\$|\1|' -e 's|^\(\s*\)grus-sdm712\.dtb$|\1|' arch/arm64/boot/dts/qcom/Makefile
           sed -n '112,126p' arch/arm64/boot/dts/qcom/Makefile
+
+          # --- SukiSU builtin non-GKI selinux_hide bug ---
+          # kernel/ksu.c only pulls in feature/selinux_hide.c when
+          #   #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
+          # but runtime/ksud.c calls three of its functions unconditionally
+          # (ksud.c:57, :95, :219/:291). On this 4.9 tree the final vmlinux link
+          # therefore fails with:
+          #   undefined reference to 'ksu_selinux_hide_handle_second_stage'
+          #   undefined reference to 'ksu_selinux_hide_handle_post_fs_data'
+          # Provide empty inlines for < 5.10; the real ones still win on >= 5.10.
+          echo "[+] Adding <5.10 stubs for SukiSU selinux_hide"
+          if [ -f drivers/kernelsu/feature/selinux_hide.h ]; then
+            grep -q 'ksu_selinux_hide_handle_post_fs_data(void) {}' drivers/kernelsu/feature/selinux_hide.h || \
+              printf '\n#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)\nstatic inline void ksu_selinux_hide_init(void) {}\nstatic inline void ksu_selinux_hide_exit(void) {}\nstatic inline void ksu_selinux_hide_drop_backup_if_unused(void) {}\nstatic inline void ksu_selinux_hide_handle_second_stage(void) {}\nstatic inline void ksu_selinux_hide_handle_post_fs_data(void) {}\n#endif\n' >> drivers/kernelsu/feature/selinux_hide.h
+            tail -10 drivers/kernelsu/feature/selinux_hide.h
+          fi
 
       - name: 🧰 Patch Kernel of Re:Kernel
         uses: ./.github/workflows/patch-rekernel
