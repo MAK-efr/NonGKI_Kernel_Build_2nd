@@ -1,0 +1,356 @@
+name: Build Lenovo Z6 Lite / K10 Note (kunlun2) - dean13 = DEAN10 with PURE GCC 4.9 (toolchain bisection)
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+env:
+  DEVICE_NAME: "lenovo_kunlun2"
+  DEVICE_CODENAME: "kunlun2"
+
+  # dean13 = dean10 EXCEPT the compiler.
+  #
+  # Fact: the stock kernel was built with
+  #   (buildslave@byws33) (gcc version 4.9.x 20150123 (prerelease) (GCC) )
+  # while every kernel we produced (dean4..dean10, and the Ultra119 vanilla
+  # bisection) was built with
+  #   (Android (7284624, based on r416183b) Clang version ...
+  #
+  # dean10 is the first build that is byte-correct everywhere else
+  # (SUBLEVEL=186, LOCALVERSION="-perf+", vermagic matches, correct boot header
+  # and DTB, ABL verifies+decompresses it and hands over) yet the device still
+  # dies with ZERO console output and ZERO pstore record, i.e. before
+  # console_init (pstore console registers at 0.229 s on the stock kernel).
+  #
+  # So the last untested variable is the toolchain itself.  Empty CLANG_SOURCE
+  # makes build-process take the `elif KERNEL_ARCH == arm64` path:
+  #     export "$GCC_64"        # CROSS_COMPILE=aarch64-linux-android-
+  #     BUILD_PROCESS           # no arg -> BUILD_CLANG="" -> CC is NOT overridden
+  #     make O=out ARCH=arm64 ...        (pure GCC)
+  # Both CUSTOM_CMDS (CLANG_TRIPLE) and EXTRA_CMDS (LD_LIBRARY_PATH) exist only
+  # for clang, so they are cleared as well.
+  CUSTOM_CMDS: ""
+  EXTRA_CMDS: ""
+
+  # dean6 = dean5 + the Kconfig abort fix.
+  # run 36995289637 (dean5) died at `scripts/kconfig/conf --silentoldconfig`:
+  #   .config:525:warning: symbol value '' invalid for LITTLE_CPU_MASK
+  #   .config:526:warning: symbol value '' invalid for BIG_CPU_MASK
+  #   Bitmask of available LITTLE CPUs (LITTLE_CPU_MASK) [] (NEW) aborted!
+  # In the 4.9.337 tree both are `int` WITHOUT a default
+  # (arch/arm64/Kconfig:705-716), so `make kunlun2_defconfig` writes them as
+  # empty -> silentoldconfig calls the value invalid -> it enters the
+  # "Restart config" prompt loop -> stdin is not a tty -> abort.
+  # The tree's own defconfig carries the intended values:
+  #   CONFIG_LITTLE_CPU_MASK=63   (0x3F = CPUs 0-5, the six A55)
+  #   CONFIG_BIG_CPU_MASK=192     (0xC0 = CPUs 6-7, the two A75)
+  # General fix: seed with the stock config, then append every entry the
+  # tree's own defconfig has and stock does not - which is exactly the set of
+  # symbols that are NEW in 4.9.337 (stock has no opinion about them, and the
+  # tree's build uses its own values). Our overrides are appended last, so
+  # they always win over anything inherited from either source.
+  KERNEL_SOURCE: "https://github.com/deanlancer/msm-4.9-kunlun2.git"
+  KERNEL_BRANCH: "android-s"
+
+  # no clang at all for dean13
+  CLANG_SOURCE: ""
+  CLANG_BRANCH: ""
+
+  GCC_GNU: false
+  GCC_64_SOURCE: "https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git"
+  GCC_64_BRANCH: "lineage-19.1"
+  GCC_32_SOURCE: "https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9.git"
+  GCC_32_BRANCH: "lineage-19.1"
+
+  DEFCONFIG_SOURCE: ""
+  DEFCONFIG_NAME: "kunlun2_defconfig"
+  DEFCONFIG_ORIGIN_IMAGE: ""
+  DEFCONFIG_FROM_BOOT: false
+
+  KERNELSU_SOURCE: ""
+  KERNELSU_BRANCH: ""
+  KERNELSU_AUTO_GET: "true"
+  KERNELSU_AUTO_FORK: "sukisu"
+  KERNELSU_METHOD: "shell"
+
+  SUSFS_ENABLE: false
+  SUSFS_FIXED: false
+  SUSFS_FOLDER_FIXED: ""
+  SUSFS_PATCH_FIXED: ""
+
+  AK3_SOURCE: "https://github.com/osm0sis/AnyKernel3.git"
+  AK3_BRANCH: "master"
+
+  BOOT_SOURCE: ""
+
+  NEED_DTBO: false
+  NEED_SAFE_DTBO: false
+
+  ROM_TEXT: "dean13"
+
+  PYTHON_VERSION: "3"
+
+  PACK_METHOD: "AnyKernel3"
+  PACK_KMODULES: "false"
+
+  PATCHES_SOURCE: "author/source"
+  PATCHES_BRANCH: "branch"
+
+  REKERNEL_ENABLE: "false"
+  DROIDSPACES_ENABLE: "false"
+  NOMOUNT_ENABLE: "false"
+
+  HOOK_METHOD: "syscall"
+
+  KPM_ENABLE: "false"
+  KPM_INLINE: "false"
+  KPM_KPATCH_NEXT: "false"
+  KPM_PATCH_SOURCE: "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU_patch/refs/heads/main/kpm/patch_linux"
+
+  BASEBAND_GUARD_ENABLE: "false"
+  BASEBAND_GUARD_BOOT: "false"
+
+  GENERATE_DTB: "false"
+  GENERATE_CHIP: "qcom"
+
+  BUILD_DEBUGGER: "false"
+  SKIP_PATCH: "false"
+
+  BUILD_OTHER_CONFIG: "false"
+  MERGE_CONFIG_FILES: ""
+
+  FREE_MORE_SPACE: "false"
+
+jobs:
+  build-kernel:
+    name: Lenovo kunlun2 dean13 pure GCC 4.9
+    runs-on: ubuntu-24.04
+    env:
+      CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_HARDLINK: "true"
+
+    steps:
+      - name: ⏰ Checkout repository
+        uses: actions/checkout@v6
+
+      - name: ⌛️ Compilation environment preparation
+        uses: ./.github/workflows/build-env
+
+      - name: ⚙️ Get necessary tools
+        uses: ./.github/workflows/build-ready
+
+      - name: 🪛 Extra Kernel Options
+        run: |
+          cd $GITHUB_WORKSPACE/device_kernel
+          D=arch/arm64/configs/kunlun2_defconfig
+          S=$GITHUB_WORKSPACE/stock-kunlun2.config
+
+          # --- 0. seed with the DEVICE'S OWN stock config -------------------
+          echo "[+] base = the tree's OWN defconfig: $(wc -l < $D) lines"
+
+          # --- 0b. module-ABI extras: symbols the stock vendor modules import --
+          # (dean9 uses the tree's own defconfig as the base, because dean8 proved
+          #  a config merged from the stock dump enables callers whose providers
+          #  this source tree does not have -> vmlinux link errors:
+          #  interrupt_stats, cec_*, gsi_debugfs_init, dump_page,
+          #  pageflag_names, qtaguid_debug_mask, ...)
+          echo "CONFIG_KALLSYMS=y" >> $D
+          echo "CONFIG_KALLSYMS_ALL=y" >> $D
+          echo "CONFIG_STACKTRACE=y" >> $D
+          echo "CONFIG_FTRACE=y" >> $D
+          echo "CONFIG_TRACING=y" >> $D
+          echo "CONFIG_EVENT_TRACING=y" >> $D
+          echo "CONFIG_IPC_LOGGING=y" >> $D
+          echo "CONFIG_SCHED_CORE_CTL=y" >> $D
+          echo "CONFIG_CC_STACKPROTECTOR=y" >> $D
+          echo "CONFIG_CC_STACKPROTECTOR_STRONG=y" >> $D
+          echo "CONFIG_DEBUG_FS=y" >> $D
+          echo "CONFIG_OVERLAY_FS=y" >> $D
+          # code this tree cannot build or does not provide
+          echo "# CONFIG_CPU_BOOST is not set" >> $D
+          echo "# CONFIG_DRM_DP_CEC is not set" >> $D
+          echo "# CONFIG_NETFILTER_XT_MATCH_QTAGUID_EXT is not set" >> $D
+          echo "[+] tree defconfig + ABI extras: $(wc -l < $D) lines"
+
+          # --- 0c. the tree's net/sctp/Makefile has a typo ------------------
+          # 'stcp-$(CONFIG_DEBUG_KERNEL) += debug.o' - the misspelled prefix
+          # means debug.o is never built, and debug.o is what defines
+          # sctp_state_tbl / sctp_evttype_tbl / sctp_status_tbl / sctp_cname /
+          # sctp_tname / sctp_oname / sctp_pname -> vmlinux link fails with
+          # "undefined reference to `sctp_state_tbl'".  Build it explicitly.
+          echo 'sctp-y += debug.o' >> net/sctp/Makefile
+          grep -n 'debug.o' net/sctp/Makefile
+
+          # --- 1. put the tree's OWN KernelSU driver back ------------------
+          rm -rf drivers/kernelsu
+          git checkout -- drivers/kernelsu
+          if [ ! -f drivers/kernelsu/sucompat.c ]; then echo "[-] kernelsu restore failed"; exit 1; fi
+          grep -q 'ksu_handle_faccessat' drivers/kernelsu/sucompat.c && echo "[+] sucompat defines the tree hook symbols"
+
+          # --- 2. KernelSU on, vanilla-off --------------------------------
+          echo "CONFIG_KSU=y" >> $D
+          echo "# CONFIG_KSU_DEBUG is not set" >> $D
+
+          # --- 3. MODULE ABI: make the stock vendor modules load -----------
+          # (a) release string must be exactly 4.9.186-perf+ : dean4 proved the
+          #     build appends nothing on its own, so "+" goes in LOCALVERSION
+          sed -i 's/^SUBLEVEL = .*/SUBLEVEL = 186/' Makefile
+          sed -i 's/^EXTRAVERSION =.*/EXTRAVERSION =/' Makefile
+          echo 'CONFIG_LOCALVERSION="-perf+"' >> $D
+          echo "# CONFIG_LOCALVERSION_AUTO is not set" >> $D
+          # (b) our keyring does not hold the stock key: forced signature
+          #     verification rejects every vendor module
+          echo "# CONFIG_MODULE_SIG is not set" >> $D
+          echo "# CONFIG_MODULE_SIG_FORCE is not set" >> $D
+          echo "# CONFIG_MODULE_SIG_ALL is not set" >> $D
+          # (c) a rebased 4.9.337 source cannot reproduce the stock genksyms
+          #     CRCs, so drop the CRC check ...
+          echo "# CONFIG_MODVERSIONS is not set" >> $D
+          # ... but keep "modversions" in VERMAGIC_STRING so the version-magic
+          #     gate still matches the vendor modules
+          sed -i 's/MODULE_VERMAGIC_MODVERSIONS ""/MODULE_VERMAGIC_MODVERSIONS "modversions "/' include/linux/vermagic.h
+          grep -n 'MODULE_VERMAGIC' include/linux/vermagic.h
+          # (d) stock has APPENDED_DTB off: the bootloader supplies the stock
+          #     dtb block plus dtbo overlays; an appended dtb would shadow them
+          echo "# CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE is not set" >> $D
+          echo "# CONFIG_BUILD_ARM64_DT_OVERLAY is not set" >> $D
+
+          # --- 4. int symbols with no default must never be empty ----------
+          # (belt and braces on top of the tree merge)
+          echo "CONFIG_LITTLE_CPU_MASK=63" >> $D
+          echo "CONFIG_BIG_CPU_MASK=192" >> $D
+
+          # --- 4b. options this tree cannot compile ------------------------
+          # stock enables CPU_BOOST, but this tree's drivers/cpufreq/cpu-boost.c
+          # does #include <linux/battery_saver.h>, which the tree does not have
+          # (the tree's own defconfig keeps CPU_BOOST off for the same reason)
+          echo "# CONFIG_CPU_BOOST is not set" >> $D
+          # --- 4c. make the built-in KernelSU report a version managers accept --
+          # ksu.h: KERNEL_SU_VERSION = (16) if KSU_GIT_VERSION is undefined; the
+          # official KernelSU manager v0.6.8 (version code 11238) needs
+          # 10000 + 1038 + 200 = 11238, and its APK signing cert matches this
+          # tree's default EXPECTED_SIZE/EXPECTED_HASH (0x033b / 0xb0b91415).
+          grep -n 'KSU_GIT_VERSION' drivers/kernelsu/Makefile || true
+          echo 'ccflags-y += -DKSU_GIT_VERSION=1038' >> drivers/kernelsu/Makefile
+          tail -5 drivers/kernelsu/Makefile
+          # --- 5. host toolchain fixes ------------------------------------
+          sed -i '/KBUILD_CFLAGS   :=/s//& -w/' Makefile
+          echo "KBUILD_HOSTCFLAGS += -fcommon" >> Makefile
+          echo "HOSTCFLAGS += -fcommon" >> Makefile
+          sed -i 's/^KBUILD_DTBS.*/KBUILD_DTBS :=/' arch/arm64/Makefile
+
+          # --- 6. 32-bit vDSO fix -----------------------------------------
+          echo "# CONFIG_COMPAT_VDSO is not set" >> $D
+
+          # --- 7. FAIL FAST: run Kconfig here, before the real build -------
+          echo "=== Kconfig self-check ==="
+          rm -rf /tmp/kchk
+          if make ARCH=arm64 O=/tmp/kchk kunlun2_defconfig > /tmp/kchk.log 2>&1; then
+            echo "[+] kunlun2_defconfig OK"
+          else
+            echo "[-] kunlun2_defconfig FAILED"; tail -30 /tmp/kchk.log; exit 1
+          fi
+          if make ARCH=arm64 O=/tmp/kchk olddefconfig >> /tmp/kchk.log 2>&1; then
+            echo "[+] olddefconfig OK"
+          else
+            echo "[-] olddefconfig FAILED"; tail -30 /tmp/kchk.log; exit 1
+          fi
+          echo "[-] remaining empty values: $(grep -c '^CONFIG_[A-Za-z0-9_]*=$' /tmp/kchk/.config || echo 0)"
+          for k in LITTLE_CPU_MASK BIG_CPU_MASK KSU MODVERSIONS MODULE_SIG COMPAT_VDSO APPENDED_DTB_IMAGE DT_OVERLAY LOCALVERSION KALLSYMS STACKTRACE TRACING IPC_LOGGING SCHED_CORE_CTL; do
+            echo "    $(grep -E "^#? ?CONFIG_${k}[= ]" /tmp/kchk/.config | head -1)"
+          done
+
+      - name: 32-bit host libs for the AOSP gcc-4.9 prebuilt
+        if: always()
+        continue-on-error: true
+        run: |
+          set -x
+          G64="$GITHUB_WORKSPACE/gcc-64/bin/aarch64-linux-android-gcc"
+          file "$G64" || true
+          if file "$G64" | grep -q "ELF 32-bit"; then
+            echo "[+] 32-bit host binary -> installing i386 runtime"
+            sudo dpkg --add-architecture i386 || true
+            sudo apt-get update -qq || true
+            sudo apt-get install -y --no-install-recommends libc6:i386 libstdc++6:i386 zlib1g:i386 || true
+          else
+            echo "[+] not a 32-bit binary"
+          fi
+
+      - name: Cross-compiler self-test (cc-option root cause)
+        if: always()
+        continue-on-error: true
+        run: |
+          echo "GCC_64=$GCC_64"
+          echo "GCC_32=$GCC_32"
+          export "$GCC_64" || true
+          export "$GCC_32" || true
+          echo "CROSS_COMPILE=$CROSS_COMPILE"
+          CCX="${CROSS_COMPILE}gcc"
+          echo "CCX=$CCX"
+          ls -l "$CCX" || true
+          file "$CCX" || true
+          ldd "$CCX" 2>&1 | head -20 || true
+          "$CCX" --version 2>&1 | head -3 || true
+          echo "int main(void){return 0;}" > /tmp/t.c
+          for f in none fno_stack fstack fstackstrong; do
+            case $f in
+              none) FLAGS="";;
+              fno_stack) FLAGS="-fno-stack-protector";;
+              fstack) FLAGS="-fstack-protector";;
+              fstackstrong) FLAGS="-fstack-protector-strong";;
+            esac
+            out=$("$CCX" $FLAGS -c /tmp/t.c -o /tmp/t-$f.o 2>&1); rc=$?
+            echo "FLAG[$f/$FLAGS] rc=$rc out=$out"
+          done
+
+      - name: 🚀 Build Process
+        uses: ./.github/workflows/build-process
+        env:
+          LOCALVERSION: ""
+
+      - name: 📋 Dump effective kernel config + module ABI
+        if: always()
+        run: |
+          cd $GITHUB_WORKSPACE
+          cp device_kernel/out/.config kunlun2_dean13.config 2>/dev/null || echo "no .config"
+          find device_kernel/out -name '*.ko' 2>/dev/null | sort > kunlun2_dean13_modules.txt || true
+          echo "[+] .ko count: $(wc -l < kunlun2_dean13_modules.txt)"
+          echo "=== TOOLCHAIN identity (GCC or clang?) ==="
+          echo "CROSS_COMPILE=$CROSS_COMPILE"
+          which aarch64-linux-android-gcc 2>/dev/null && aarch64-linux-android-gcc --version | head -2 || echo "(gcc not on PATH)"
+          which clang 2>/dev/null | head -1 || true
+          echo "=== config check ==="
+          grep -E '^CONFIG_MODULES=|^CONFIG_MODULE_SIG|^CONFIG_MODVERSIONS|^CONFIG_LOCALVERSION|^CONFIG_KSU|COMPAT_VDSO|APPENDED_DTB|DT_OVERLAY|^CONFIG_KALLSYMS|^CONFIG_STACKTRACE=|^CONFIG_TRACING=|^CONFIG_IPC_LOGGING|^CONFIG_SCHED_CORE_CTL|^CONFIG_DVB_MPQ|^CONFIG_CC_STACKPROTECTOR=|LITTLE_CPU_MASK|BIG_CPU_MASK' kunlun2_dean13.config || true
+          echo "=== kernel release ==="
+          cat device_kernel/out/include/config/kernel.release 2>/dev/null || cat device_kernel/include/config/kernel.release 2>/dev/null || echo "(no kernel.release)"
+          echo "=== VERMAGIC actually compiled into Image ==="
+          ls -la device_kernel/out/arch/arm64/boot/ 2>/dev/null | head
+          grep -a -o -m1 '4\.9\.[0-9][^ ]* SMP [ -~]*mod_unload[ -~]*' device_kernel/out/arch/arm64/boot/Image 2>/dev/null || echo "(no Image yet)"
+          echo "=== compiler that actually produced .o files ==="
+          grep -a -o -m3 'GCC: (GNU) [0-9][^)]*)' device_kernel/out/arch/arm64/boot/Image 2>/dev/null || true
+          grep -a -o -m3 'clang version [0-9][^)]*)' device_kernel/out/arch/arm64/boot/Image 2>/dev/null || true
+          echo "=== error.log (if any) ==="
+          for f in $GITHUB_WORKSPACE/error.log device_kernel/error.log; do
+            if [ -f "$f" ]; then echo "[$f]"; grep -n -E 'fatal error:|error:|Error [0-9]|No rule to make' "$f" | head -80; fi
+          done
+          echo "=== Module.symvers ==="
+          find device_kernel -name Module.symvers -exec cp {} "$GITHUB_WORKSPACE/kunlun2_dean13-symvers.txt" \; 2>/dev/null || true
+          wc -l "$GITHUB_WORKSPACE/kunlun2_dean13-symvers.txt" 2>/dev/null || true
+
+      - name: 📤 Upload config diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kunlun2-dean13-config
+          path: |
+            kunlun2_dean13.config
+            kunlun2_dean13_modules.txt
+            kunlun2_dean13-symvers.txt
+          if-no-files-found: warn
+
+      - name: 🔩 Pack Process
+        uses: ./.github/workflows/pack-process
+
+      - name: ✏️ Upload Artifacts
+        uses: ./.github/workflows/upload-files
