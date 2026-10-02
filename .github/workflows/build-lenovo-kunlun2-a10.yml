@@ -9,8 +9,11 @@ env:
   DEVICE_NAME: "lenovo_kunlun2"
   DEVICE_CODENAME: "kunlun2"
 
-  CUSTOM_CMDS: ""
-  EXTRA_CMDS: ""
+  # 内核 Makefile 在 clang + aarch64-linux-android- 前缀下强制要求 CLANG_TRIPLE，
+  # 不设就报 "Clang with Android --target detected. Did you specify CLANG_TRIPLE?"。
+  # 官方 build-google-pixel-3a-lineageos22-a15.yml 用的就是这两行。
+  CUSTOM_CMDS: "CLANG_TRIPLE=aarch64-linux-gnu-"
+  EXTRA_CMDS: "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/clang-custom/lib64"
 
   # Ultra119/kernel_lenovo_sdm710 - kernel source for kunlun2 / kunlun2_row / jd2019
   # branch eleven = Linux 4.9.268 (closest LTS branch to the stock 4.9.186)
