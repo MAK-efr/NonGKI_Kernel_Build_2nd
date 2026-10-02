@@ -32,7 +32,7 @@ env:
   GCC_32_BRANCH: "lineage-19.1"
 
   DEFCONFIG_SOURCE: ""
-  DEFCONFIG_NAME: "kunlun2_defconfig"
+  DEFCONFIG_NAME: "defconfig"
   DEFCONFIG_ORIGIN_IMAGE: ""
   DEFCONFIG_FROM_BOOT: false
 
@@ -131,7 +131,18 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/device_kernel
           # KernelSU syscall hook
-          echo "CONFIG_KSU_TAMPER_SYSCALL_TABLE=y" >> ./arch/arm64/configs/kunlun2_defconfig
+          # IMPORTANT: the build target is arch/arm64/configs/defconfig, NOT
+          # kunlun2_defconfig. This tree's defconfig is byte-identical to the
+          # stock kunlun2 4.9.186 kernel's own .config (146046 B, extracted from
+          # the shipped Image via IKCFG_ST), i.e. it IS the real device config;
+          # kunlun2_defconfig is a 661-line variant that drops ~900 symbols
+          # (CONFIG_MEMBARRIER, synaptics/cypress touch, HZ=100, the 7 =m
+          # modules...) and produced a kernel that hangs on the boot logo.
+          echo "CONFIG_KSU_TAMPER_SYSCALL_TABLE=y" >> ./arch/arm64/configs/defconfig
+          # CONFIG_KSU_SUSFS=n written by the factory is invalid kconfig syntax
+          # and silently ignored; SUSFS then keeps its Kconfig default (y) and
+          # the build dies on 'linux/susfs.h: No such file'. Turn it off properly.
+          echo "# CONFIG_KSU_SUSFS is not set" >> ./arch/arm64/configs/defconfig
           # SELinux rwlock must not be static for KernelSU to hook it
           sed -i 's/^static DEFINE_RWLOCK(policy_rwlock);$/DEFINE_RWLOCK(policy_rwlock);/' security/selinux/ss/services.c
           # Silence the very chatty 4.9 tree
