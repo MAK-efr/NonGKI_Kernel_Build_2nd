@@ -137,6 +137,16 @@ jobs:
           # Silence the very chatty 4.9 tree
           sed -i '/KBUILD_CFLAGS   :=/s//& -w/' Makefile
 
+          # --- HOST TOOLS FIX (GCC >= 10) ---
+          # This 4.9 tree relies on pre-GCC-10 tentative-definition merging for
+          # dtc's yylloc. Ubuntu runners ship GCC >= 10 where -fno-common is the
+          # default, so linking scripts/dtc-aosp/dtc-aosp dies with:
+          #   multiple definition of `yylloc'  (dtc-parser.tab.o vs dtc-lexer.lex.o)
+          # HOSTCFLAGS feeds KBUILD_HOSTCFLAGS in 4.9; set both to be safe.
+          echo "[+] Allowing common symbols in host tools (-fcommon)"
+          echo "KBUILD_HOSTCFLAGS += -fcommon" >> Makefile
+          echo "HOSTCFLAGS += -fcommon" >> Makefile
+
       - name: 🧰 Patch Kernel of Re:Kernel
         uses: ./.github/workflows/patch-rekernel
 
