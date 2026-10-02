@@ -158,29 +158,31 @@ jobs:
           echo "KBUILD_HOSTCFLAGS += -fcommon" >> Makefile
           echo "HOSTCFLAGS += -fcommon" >> Makefile
 
-          # --- DTB / DTC FIX (the real defconfig pulls in every qcom board) ---
-          # arch/arm64/configs/defconfig enables all CONFIG_ARCH_* boards, so
-          # `make` builds every qcom DTB and dies on boards this tree cannot
-          # parse, e.g.
-          #   DTC arch/arm64/boot/dts/qcom/sxr1120-lc-mtp.dtb
-          #   ERROR (duplicate_label): Duplicate label 'msm_vidc0' on
-          #     /soc/qcom,vidc0 and /soc/qcom,vidc0@aa00000
-          #   ERROR: Input tree has errors, aborting (use -f to force output)
-          #   make[3]: *** [scripts/Makefile.lib:328: .../sxr1120-lc-mtp.dtb] Error 2
-          #   make[1]: *** [arch/arm64/Makefile:155: dtbs] Error 2
-          # We never consume the kernel's DTBs (boot.img keeps the *stock* dtb
-          # section, both through AnyKernel3 and through our own repack_boot.py),
-          # so tell dtc to emit the blob even when a DTS has errors.
-          echo "[+] Letting dtc force-emit DTBs (-f)"
-          echo "DTC_FLAGS += -f" >> Makefile
-          # ...but a top-level "DTC_FLAGS += -f" did NOT reach the dtc command
-          # line (proved by run 36979031699: same abort, no -f anywhere in the
-          # DTC calls), so put the flag directly on the command in Makefile.lib.
-          sed -i 's/$(DTC_FLAGS)/$(DTC_FLAGS) -f/' scripts/Makefile.lib
-          # Belt and braces: drop the one board whose DTS this tree cannot parse.
-          sed -i '/sxr1120/d' arch/arm64/boot/dts/qcom/Makefile
-          grep -n 'DTC_FLAGS' scripts/Makefile.lib | head -5 || true
-          grep -n 'sxr1120' arch/arm64/boot/dts/qcom/Makefile || echo "[+] sxr1120 dtb entries removed"
+          # --- DTB: SKIP THE WHOLE dtbs TARGET (do not build any qcom DTB) ---
+          # arch/arm64/configs/defconfig (the *real* stock config) enables every
+          # CONFIG_ARCH_* board, and arch/arm64/Makefile:136 is
+          #     all:  $(KBUILD_IMAGE) $(KBUILD_DTBS)
+          # with KBUILD_DTBS := dtbs on line 130 -- so a plain `make` compiles
+          # EVERY qcom DTB, and this tree ships DTS files it cannot parse:
+          #   sxr1120-lc-mtp.dtb: ERROR (duplicate_label) msm_vidc0
+          #                       ERROR: Input tree has errors, aborting (use -f)
+          #   sxr1130-svr.dtb:    Label or path dsi_dual_xrsmrtvwr_jdi_video not found
+          #                       FATAL ERROR: Syntax error parsing input tree
+          # dtc's -f only bypasses the *check* stage, never parse/reference
+          # fatals (run 36979739144 proved that), so deleting boards one by one
+          # is a losing game.
+          # We never consume the kernel's DTBs: boot.img keeps the *stock* dtb
+          # section (AnyKernel3 does that, and so does our repack_boot.py), and
+          # the pack step falls back to Image.gz when Image.gz-dtb is absent
+          # (pack-process/action.yml:34-45). So empty KBUILD_DTBS and `all:`
+          # becomes just Image.gz -- $(CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE) is
+          # "not set" in this defconfig, so KBUILD_IMAGE stays Image.gz and
+          # nothing ever asks for a DTB.
+          echo "[+] Skipping the whole dtbs target (stock dtb section is kept)"
+          grep -n '^KBUILD_DTBS' arch/arm64/Makefile || true
+          sed -i 's/^KBUILD_DTBS.*/KBUILD_DTBS :=/' arch/arm64/Makefile
+          grep -n '^KBUILD_DTBS' arch/arm64/Makefile || true
+          grep -n '^all:' arch/arm64/Makefile || true
 
           # --- SukiSU builtin sulog bug ---
           # With CONFIG_KSU_SUSFS *unset*, the in-tree ksu_sulog_capture()
