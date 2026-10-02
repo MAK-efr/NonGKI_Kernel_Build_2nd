@@ -17,10 +17,11 @@ env:
   KERNEL_SOURCE: "https://github.com/Ultra119/kernel_lenovo_sdm710.git"
   KERNEL_BRANCH: "eleven"
 
-  CLANG_SOURCE: ""
-  CLANG_BRANCH: ""
+  # The 4.9.268 tree rejects GCC 4.9 (include/linux/compiler-gcc.h requires >= 5.1),
+  # so clang must drive the build. Compiler choice does not affect kernel ABI.
+  CLANG_SOURCE: "https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b.git"
+  CLANG_BRANCH: "lineage-20.0"
 
-  # Stock kernel was built with gcc 4.9.x (per /proc/version), so GCC-only is correct here.
   GCC_GNU: false
   GCC_64_SOURCE: "https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git"
   GCC_64_BRANCH: "lineage-19.1"
