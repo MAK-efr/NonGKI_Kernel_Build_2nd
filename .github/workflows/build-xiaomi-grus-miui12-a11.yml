@@ -209,7 +209,7 @@ jobs:
           # So prepend them to goodix_ts_core.c instead: single TU, defined
           # before the call sites.
           echo "[+] Stubbing Goodix test_core entry points"
-          GC=c drivers/input/touchscreen/tp_goodix_driver/goodix_ts_core.c
+          GC=drivers/input/touchscreen/tp_goodix_driver/goodix_ts_core.c
           if [ -f "$GC" ] && ! grep -q 'int test_process(void \*dev)' "$GC"; then
             printf '/* grus-r dropped test_core/ but goodix_ts_core.c still calls these */\nstatic inline int test_process(void *dev) { return 0; }\nstatic inline int get_tp_rawdata(void *dev, char *buf, int *buf_size) { return 0; }\nstatic inline int get_tp_testcfg(void *dev, char *buf, int *buf_size) { return 0; }\n' > /tmp/gtstub.txt
             cat /tmp/gtstub.txt "$GC" > /tmp/gtstub.c
