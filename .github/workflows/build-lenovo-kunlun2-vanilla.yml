@@ -37,7 +37,7 @@ env:
 
   KERNELSU_SOURCE: ""
   KERNELSU_BRANCH: ""
-  KERNELSU_AUTO_GET: "false"
+  KERNELSU_AUTO_GET: "true"
   KERNELSU_AUTO_FORK: "sukisu"
   KERNELSU_METHOD: "shell"
 
@@ -123,6 +123,14 @@ jobs:
           sed -i 's/^KBUILD_DTBS.*/KBUILD_DTBS :=/' arch/arm64/Makefile
           grep -n '^KBUILD_DTBS' arch/arm64/Makefile || true
           grep -n '^all:' arch/arm64/Makefile || true
+
+          # VANILLA: turn KernelSU OFF. The factory's build-ready step already
+          # appended "CONFIG_KSU=y" to this defconfig earlier in the job; kconfig
+          # honours the LAST assignment, so this line wins -> CONFIG_KSU=n and
+          # drivers/kernelsu is never compiled. Everything else (tree, toolchain,
+          # defconfig, -fcommon, KBUILD_DTBS) is byte-identical to the SukiSU build.
+          echo "# CONFIG_KSU is not set" >> arch/arm64/configs/defconfig
+          grep -n 'CONFIG_KSU' arch/arm64/configs/defconfig || true
 
       - name: 🚀 Build Process
         uses: ./.github/workflows/build-process
