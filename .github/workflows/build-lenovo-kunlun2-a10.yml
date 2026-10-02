@@ -173,6 +173,14 @@ jobs:
           # so tell dtc to emit the blob even when a DTS has errors.
           echo "[+] Letting dtc force-emit DTBs (-f)"
           echo "DTC_FLAGS += -f" >> Makefile
+          # ...but a top-level "DTC_FLAGS += -f" did NOT reach the dtc command
+          # line (proved by run 36979031699: same abort, no -f anywhere in the
+          # DTC calls), so put the flag directly on the command in Makefile.lib.
+          sed -i 's/$(DTC_FLAGS)/$(DTC_FLAGS) -f/' scripts/Makefile.lib
+          # Belt and braces: drop the one board whose DTS this tree cannot parse.
+          sed -i '/sxr1120/d' arch/arm64/boot/dts/qcom/Makefile
+          grep -n 'DTC_FLAGS' scripts/Makefile.lib | head -5 || true
+          grep -n 'sxr1120' arch/arm64/boot/dts/qcom/Makefile || echo "[+] sxr1120 dtb entries removed"
 
           # --- SukiSU builtin sulog bug ---
           # With CONFIG_KSU_SUSFS *unset*, the in-tree ksu_sulog_capture()
