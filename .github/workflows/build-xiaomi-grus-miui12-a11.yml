@@ -195,18 +195,26 @@ jobs:
           # Its (commented-out) Makefile line shows the original build used
           #   ... goodix_ts_tools.o test_core/
           # and goodix_ts_core.c still calls test_process()/get_tp_rawdata()/
-          # get_tp_testcfg() from there (lines 707/747/795 and 2357) ->
+          # get_tp_testcfg() from there (calls at :707/:747/:795/:2357) ->
           #   undefined reference to `test_process'
-          # All three are only reachable from the tp_test / tp_rawdata /
-          # tp_get_testcfg sysfs test-tool entry points, never from the normal
-          # touch path, so no-op stubs keep touch working and only disable the
-          # factory test tooling. Signatures taken from the call sites
-          # (struct device * at :707, void * cast at :2357, int *buf_size).
+          # Only reachable from the tp_test / tp_rawdata / tp_get_testcfg sysfs
+          # test-tool entry points, never from the normal touch path, so no-op
+          # stubs keep touch working and only disable the factory test tooling.
+          # IMPORTANT: do NOT append these to goodix_ts_core.h -- that header
+          # has an include guard (#ifndef _GOODIX_TS_CORE_H_ at :21) and an
+          # append lands AFTER its #endif, so the second include of the header
+          # (goodix_ts_i2c.c:28 -> goodix_cfg_bin.h:4 -> goodix_ts_core.h)
+          # re-parses them and clang errors with
+          #   goodix_ts_core.h:813:19: error: redefinition of 'test_process'
+          # So prepend them to goodix_ts_core.c instead: single TU, defined
+          # before the call sites.
           echo "[+] Stubbing Goodix test_core entry points"
-          if [ -f drivers/input/touchscreen/tp_goodix_driver/goodix_ts_core.h ]; then
-            grep -q 'int test_process(void \*dev)' drivers/input/touchscreen/tp_goodix_driver/goodix_ts_core.h || \
-              printf '\n/* grus-r dropped test_core/ but goodix_ts_core.c still calls these */\nstatic inline int test_process(void *dev) { return 0; }\nstatic inline int get_tp_rawdata(void *dev, char *buf, int *buf_size) { return 0; }\nstatic inline int get_tp_testcfg(void *dev, char *buf, int *buf_size) { return 0; }\n' >> drivers/input/touchscreen/tp_goodix_driver/goodix_ts_core.h
-            tail -6 drivers/input/touchscreen/tp_goodix_driver/goodix_ts_core.h
+          GC=c drivers/input/touchscreen/tp_goodix_driver/goodix_ts_core.c
+          if [ -f "$GC" ] && ! grep -q 'int test_process(void \*dev)' "$GC"; then
+            printf '/* grus-r dropped test_core/ but goodix_ts_core.c still calls these */\nstatic inline int test_process(void *dev) { return 0; }\nstatic inline int get_tp_rawdata(void *dev, char *buf, int *buf_size) { return 0; }\nstatic inline int get_tp_testcfg(void *dev, char *buf, int *buf_size) { return 0; }\n' > /tmp/gtstub.txt
+            cat /tmp/gtstub.txt "$GC" > /tmp/gtstub.c
+            mv /tmp/gtstub.c "$GC"
+            head -5 "$GC"
           fi
 
           # --- grus-r standalone DTBs cannot build ---
