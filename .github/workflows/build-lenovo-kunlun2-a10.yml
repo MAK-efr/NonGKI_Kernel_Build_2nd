@@ -158,8 +158,7 @@ jobs:
           # variant wants the value; we build non-SUSFS, so dereference.
           # Harmless: GRANT_ROOT sets should_skip_copy and never reads argv.
           echo "[+] Fixing SukiSU sulog USER_ARG_NULL for non-SUSFS build"
-          sed -i 's/#define USER_ARG_NULL user_arg_null_ptr()/#define USER_ARG_NULL (*user_arg_null_ptr())/' \\
-            drivers/kernelsu/sulog/event.c
+          sed -i 's/#define USER_ARG_NULL user_arg_null_ptr()/#define USER_ARG_NULL (*user_arg_null_ptr())/' drivers/kernelsu/sulog/event.c
           grep -n "USER_ARG_NULL" drivers/kernelsu/sulog/event.c || true
 
       - name: 🧰 Patch Kernel of Re:Kernel
