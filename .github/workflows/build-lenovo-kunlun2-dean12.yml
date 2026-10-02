@@ -165,7 +165,7 @@ jobs:
           echo "CONFIG_SCHED_CORE_CTL=y" >> $D
           echo "CONFIG_CC_STACKPROTECTOR=y" >> $D
           echo "# CONFIG_CC_STACKPROTECTOR_STRONG is not set" >> $D
-echo "CONFIG_CC_STACKPROTECTOR_REGULAR=y" >> $D
+          echo "CONFIG_CC_STACKPROTECTOR_REGULAR=y" >> $D
           echo "CONFIG_DEBUG_FS=y" >> $D
           echo "CONFIG_OVERLAY_FS=y" >> $D
           # code this tree cannot build or does not provide
