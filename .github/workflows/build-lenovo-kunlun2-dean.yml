@@ -132,6 +132,14 @@ jobs:
           echo "# CONFIG_KSU is not set" >> arch/arm64/configs/kunlun2_defconfig
           grep -n 'CONFIG_KSU' arch/arm64/configs/kunlun2_defconfig || true
 
+          # 32-bit vDSO fix: vdso32/Makefile uses  $(CC) --target=arm32 -no-integrated-as
+          # while CROSS_COMPILE_ARM32 is empty on this runner, so clang falls back to the
+          # host /usr/bin/as which rejects '-EL'.  arch/arm64/Makefile gates the whole
+          # vdso32 build on CONFIG_VDSO32, which is only set when CONFIG_COMPAT_VDSO=y,
+          # so turning COMPAT_VDSO off drops vdso32 entirely (32-bit app compat stays).
+          echo "# CONFIG_COMPAT_VDSO is not set" >> arch/arm64/configs/kunlun2_defconfig
+          grep -n 'COMPAT_VDSO' arch/arm64/configs/kunlun2_defconfig || true
+
       - name: 🚀 Build Process
         uses: ./.github/workflows/build-process
 
