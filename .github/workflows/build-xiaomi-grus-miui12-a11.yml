@@ -167,6 +167,32 @@ jobs:
           sed -i 's/USER_ARG_NULL, gfp)/*(USER_ARG_NULL), gfp)/' drivers/kernelsu/sulog/event.c
           grep -n "USER_ARG_NULL" drivers/kernelsu/sulog/event.c || true
 
+          # --- grus-r is missing drivers/input/touchscreen/xiaomi/ ---
+          # Every OTHER branch of Gah0/android_xiaomi_kernel_grus has that dir;
+          # grus-r does not, yet tp_goodix_driver/goodix_ts_i2c.c:31 includes
+          # "../xiaomi/xiaomi_touch.h" unconditionally ->
+          #   fatal error: ../xiaomi/xiaomi_touch.h: No such file or directory
+          # Every *use* of it sits inside #ifdef CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE,
+          # which this tree cannot even select (its Kconfig is gone too) -> stub is enough.
+          echo "[+] Stubbing the xiaomi_touch.h that grus-r forgot"
+          mkdir -p drivers/input/touchscreen/xiaomi
+          printf '#ifndef __XIAOMI__TOUCH_H\n#define __XIAOMI__TOUCH_H\n#endif\n' > drivers/input/touchscreen/xiaomi/xiaomi_touch.h
+          ls -l drivers/input/touchscreen/xiaomi/xiaomi_touch.h
+
+          # --- grus-r standalone DTBs cannot build ---
+          # grus-sdm710.dtsi:465/469 reference &smb1355_0 / &smb1355_1, which
+          # only exist in the full grus.dts overlay ->
+          #   grus-sdm710.dtsi:465.1-11 Label or path smb1355_0 not found
+          #   FATAL ERROR: Syntax error parsing input tree
+          # The device ships a real dtbo partition, so the stock build takes the
+          # CONFIG_BUILD_ARM64_DT_OVERLAY=y branch (grus.dtb + overlay) and never
+          # builds those two standalone DTBs. Mirror that, and also neuter the
+          # else-branch list so the broken targets disappear either way.
+          echo "[+] Building DTBs the way the device does (DT_OVERLAY)"
+          echo "CONFIG_BUILD_ARM64_DT_OVERLAY=y" >> arch/arm64/configs/grus_defconfig
+          sed -i -e 's|^\(\s*\)grus-sdm710\.dtb *\\$|\1|' -e 's|^\(\s*\)grus-sdm712\.dtb$|\1|' arch/arm64/boot/dts/qcom/Makefile
+          sed -n '112,126p' arch/arm64/boot/dts/qcom/Makefile
+
       - name: 🧰 Patch Kernel of Re:Kernel
         uses: ./.github/workflows/patch-rekernel
 
