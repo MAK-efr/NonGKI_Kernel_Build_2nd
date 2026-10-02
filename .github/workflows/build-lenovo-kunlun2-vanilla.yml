@@ -1,0 +1,152 @@
+name: Build Lenovo Z6 Lite / K10 Note (kunlun2) - VANILLA bisection (no KernelSU)
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+env:
+  DEVICE_NAME: "lenovo_kunlun2"
+  DEVICE_CODENAME: "kunlun2"
+
+  CUSTOM_CMDS: "CLANG_TRIPLE=aarch64-linux-gnu-"
+  EXTRA_CMDS: "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/clang-custom/lib64"
+
+  # Same tree / branch / toolchain / defconfig as the SukiSU build. The ONLY
+  # difference is KernelSU_AUTO_GET=false: no KSU source, no KSU hooks, no
+  # CONFIG_KSU. Purpose: bisect the "hangs on the boot logo" failure.
+  #   - if THIS boots -> the tree+toolchain+defconfig are fine and the KernelSU
+  #     integration is what kills the kernel
+  #   - if THIS also hangs -> the 4.9.268 tree / clang image itself cannot boot
+  #     this device and SukiSU-on-custom-kernel is not viable here
+  KERNEL_SOURCE: "https://github.com/Ultra119/kernel_lenovo_sdm710.git"
+  KERNEL_BRANCH: "eleven"
+
+  CLANG_SOURCE: "https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b.git"
+  CLANG_BRANCH: "lineage-20.0"
+
+  GCC_GNU: false
+  GCC_64_SOURCE: "https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git"
+  GCC_64_BRANCH: "lineage-19.1"
+  GCC_32_SOURCE: "https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9.git"
+  GCC_32_BRANCH: "lineage-19.1"
+
+  DEFCONFIG_SOURCE: ""
+  DEFCONFIG_NAME: "defconfig"
+  DEFCONFIG_ORIGIN_IMAGE: ""
+  DEFCONFIG_FROM_BOOT: false
+
+  KERNELSU_SOURCE: ""
+  KERNELSU_BRANCH: ""
+  KERNELSU_AUTO_GET: "false"
+  KERNELSU_AUTO_FORK: "sukisu"
+  KERNELSU_METHOD: "shell"
+
+  SUSFS_ENABLE: false
+  SUSFS_FIXED: false
+  SUSFS_FOLDER_FIXED: ""
+  SUSFS_PATCH_FIXED: ""
+
+  AK3_SOURCE: "https://github.com/osm0sis/AnyKernel3.git"
+  AK3_BRANCH: "master"
+
+  BOOT_SOURCE: ""
+
+  NEED_DTBO: false
+  NEED_SAFE_DTBO: false
+
+  ROM_TEXT: "vanilla_test"
+
+  PYTHON_VERSION: "3"
+
+  PACK_METHOD: "AnyKernel3"
+  PACK_KMODULES: "true"
+
+  PATCHES_SOURCE: "author/source"
+  PATCHES_BRANCH: "branch"
+
+  REKERNEL_ENABLE: "false"
+  DROIDSPACES_ENABLE: "false"
+  NOMOUNT_ENABLE: "false"
+
+  HOOK_METHOD: "syscall"
+
+  KPM_ENABLE: "false"
+  KPM_INLINE: "false"
+  KPM_KPATCH_NEXT: "false"
+  KPM_PATCH_SOURCE: "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU_patch/refs/heads/main/kpm/patch_linux"
+
+  BASEBAND_GUARD_ENABLE: "false"
+  BASEBAND_GUARD_BOOT: "false"
+
+  GENERATE_DTB: "false"
+  GENERATE_CHIP: "qcom"
+
+  BUILD_DEBUGGER: "false"
+  SKIP_PATCH: "false"
+
+  BUILD_OTHER_CONFIG: "false"
+  MERGE_CONFIG_FILES: ""
+
+  FREE_MORE_SPACE: "false"
+
+jobs:
+  build-kernel:
+    name: Lenovo kunlun2 VANILLA (no KernelSU)
+    runs-on: ubuntu-24.04
+    env:
+      CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_HARDLINK: "true"
+
+    steps:
+      - name: ⏰ Checkout repository
+        uses: actions/checkout@v6
+
+      - name: ⌛️ Compilation environment preparation
+        uses: ./.github/workflows/build-env
+
+      - name: ⚙️ Get necessary tools
+        uses: ./.github/workflows/build-ready
+
+      - name: 🪛 Extra Kernel Options
+        run: |
+          cd $GITHUB_WORKSPACE/device_kernel
+          # Silence the very chatty 4.9 tree
+          sed -i '/KBUILD_CFLAGS   :=/s//& -w/' Makefile
+
+          # HOST TOOLS FIX (GCC >= 10): 4.9's scripts/dtc-aosp relies on
+          # pre-GCC-10 tentative-definition merging for yylloc.
+          echo "KBUILD_HOSTCFLAGS += -fcommon" >> Makefile
+          echo "HOSTCFLAGS += -fcommon" >> Makefile
+
+          # DTB: skip the whole dtbs target (stock dtb section is what we use)
+          sed -i 's/^KBUILD_DTBS.*/KBUILD_DTBS :=/' arch/arm64/Makefile
+          grep -n '^KBUILD_DTBS' arch/arm64/Makefile || true
+          grep -n '^all:' arch/arm64/Makefile || true
+
+      - name: 🚀 Build Process
+        uses: ./.github/workflows/build-process
+
+      - name: 📋 Dump effective kernel config
+        if: always()
+        run: |
+          cp device_kernel/out/.config "$GITHUB_WORKSPACE/kunlun2_vanilla.config" 2>/dev/null || echo "no .config"
+          find device_kernel/out -name '*.ko' 2>/dev/null | sort > "$GITHUB_WORKSPACE/kunlun2_vanilla_modules.txt" || true
+          echo "[+] .ko count: $(wc -l < "$GITHUB_WORKSPACE/kunlun2_vanilla_modules.txt")"
+          grep -E '^CONFIG_MODULES=|^CONFIG_MODULE_SIG|^CONFIG_LOCALVERSION|KSU' "$GITHUB_WORKSPACE/kunlun2_vanilla.config" || true
+
+      - name: 📤 Upload config diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kunlun2-vanilla-config
+          path: |
+            kunlun2_vanilla.config
+            kunlun2_vanilla_modules.txt
+          if-no-files-found: warn
+
+      - name: 🔩 Pack Process
+        uses: ./.github/workflows/pack-process
+
+      - name: ✏️ Upload Artifacts
+        uses: ./.github/workflows/upload-files
