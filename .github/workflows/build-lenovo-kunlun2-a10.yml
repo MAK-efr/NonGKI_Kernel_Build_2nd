@@ -158,6 +158,22 @@ jobs:
           echo "KBUILD_HOSTCFLAGS += -fcommon" >> Makefile
           echo "HOSTCFLAGS += -fcommon" >> Makefile
 
+          # --- DTB / DTC FIX (the real defconfig pulls in every qcom board) ---
+          # arch/arm64/configs/defconfig enables all CONFIG_ARCH_* boards, so
+          # `make` builds every qcom DTB and dies on boards this tree cannot
+          # parse, e.g.
+          #   DTC arch/arm64/boot/dts/qcom/sxr1120-lc-mtp.dtb
+          #   ERROR (duplicate_label): Duplicate label 'msm_vidc0' on
+          #     /soc/qcom,vidc0 and /soc/qcom,vidc0@aa00000
+          #   ERROR: Input tree has errors, aborting (use -f to force output)
+          #   make[3]: *** [scripts/Makefile.lib:328: .../sxr1120-lc-mtp.dtb] Error 2
+          #   make[1]: *** [arch/arm64/Makefile:155: dtbs] Error 2
+          # We never consume the kernel's DTBs (boot.img keeps the *stock* dtb
+          # section, both through AnyKernel3 and through our own repack_boot.py),
+          # so tell dtc to emit the blob even when a DTS has errors.
+          echo "[+] Letting dtc force-emit DTBs (-f)"
+          echo "DTC_FLAGS += -f" >> Makefile
+
           # --- SukiSU builtin sulog bug ---
           # With CONFIG_KSU_SUSFS *unset*, the in-tree ksu_sulog_capture()
           # takes `const struct user_arg_ptr argv` BY VALUE (event.c:289), while
