@@ -197,6 +197,33 @@ jobs:
       - name: 🚀 Build Process
         uses: ./.github/workflows/build-process
 
+      # DIAGNOSTIC (2026-10-02): the first successful build produced an
+      # AnyKernel3 zip whose modules/ dir held only a `placeholder` -- i.e. the
+      # kernel shipped ZERO loadable modules. The stock /vendor .ko are built
+      # against 4.9.186 with Lenovo's signing key, so they can never load on a
+      # 4.9.268 kernel signed with ours. If the phone hangs at the logo, the
+      # missing vendor modules are the prime suspect, so dump the effective
+      # .config and the built-module inventory to compare against the stock
+      # 4.9.186 config extracted from boot_live.img.
+      - name: 📋 Dump effective kernel config
+        if: always()
+        run: |
+          cp device_kernel/out/.config "$GITHUB_WORKSPACE/kunlun2_effective.config" 2>/dev/null || echo "no .config"
+          find device_kernel/out -name '*.ko' 2>/dev/null | sort > "$GITHUB_WORKSPACE/kunlun2_built_modules.txt" || true
+          echo "[+] .ko count: $(wc -l < "$GITHUB_WORKSPACE/kunlun2_built_modules.txt")"
+          echo "[+] module-related symbols:"
+          grep -E '^CONFIG_MODULES=|^CONFIG_MODULE_SIG|^CONFIG_LOCALVERSION' "$GITHUB_WORKSPACE/kunlun2_effective.config" || true
+
+      - name: 📤 Upload config diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kunlun2-effective-config
+          path: |
+            kunlun2_effective.config
+            kunlun2_built_modules.txt
+          if-no-files-found: warn
+
       - name: 🔩 Pack Process
         uses: ./.github/workflows/pack-process
 
