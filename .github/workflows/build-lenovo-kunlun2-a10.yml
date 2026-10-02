@@ -171,11 +171,15 @@ jobs:
           #   undefined reference to 'ksu_selinux_hide_handle_second_stage'
           #   undefined reference to 'ksu_selinux_hide_handle_post_fs_data'
           # Provide empty inlines for < 5.10; the real ones still win on >= 5.10.
+          # NOTE: it is NOT enough to patch feature/selinux_hide.h -- ksu.c
+          # guards the *header* include too (ksu.c:33-35). So put the stubs in
+          # kernel_includes.h, which ksu.c:1 pulls in unconditionally and which
+          # already includes <linux/version.h> (line 72).
           echo "[+] Adding <5.10 stubs for SukiSU selinux_hide"
-          if [ -f drivers/kernelsu/feature/selinux_hide.h ]; then
-            grep -q 'ksu_selinux_hide_handle_post_fs_data(void) {}' drivers/kernelsu/feature/selinux_hide.h || \
-              printf '\n#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)\nstatic inline void ksu_selinux_hide_init(void) {}\nstatic inline void ksu_selinux_hide_exit(void) {}\nstatic inline void ksu_selinux_hide_drop_backup_if_unused(void) {}\nstatic inline void ksu_selinux_hide_handle_second_stage(void) {}\nstatic inline void ksu_selinux_hide_handle_post_fs_data(void) {}\n#endif\n' >> drivers/kernelsu/feature/selinux_hide.h
-            tail -10 drivers/kernelsu/feature/selinux_hide.h
+          if [ -f drivers/kernelsu/kernel_includes.h ]; then
+            grep -q 'ksu_selinux_hide_handle_post_fs_data(void) {}' drivers/kernelsu/kernel_includes.h || \
+              printf '\n#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)\nstatic inline void ksu_selinux_hide_init(void) {}\nstatic inline void ksu_selinux_hide_exit(void) {}\nstatic inline void ksu_selinux_hide_drop_backup_if_unused(void) {}\nstatic inline void ksu_selinux_hide_handle_second_stage(void) {}\nstatic inline void ksu_selinux_hide_handle_post_fs_data(void) {}\n#endif\n' >> drivers/kernelsu/kernel_includes.h
+            tail -9 drivers/kernelsu/kernel_includes.h
           fi
 
       - name: 🧰 Patch Kernel of Re:Kernel
