@@ -111,6 +111,8 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/device_kernel
 
+          # 2026-10-03: build-ready 已修（cd kernelsu 短路），此注释仅用于触发重跑
+
           # stock defconfig，一字不改（纯基线，无 KSU 无 SUSFS 无 RO 改动）
           curl -sSL "https://raw.githubusercontent.com/MAK-efr/NonGKI_Kernel_Build_2nd/mainline/_defconfigs/grus_stock_defconfig" -o ./arch/arm64/configs/grus_defconfig
           echo "--- defconfig sanity ---"
