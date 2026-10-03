@@ -1,4 +1,4 @@
-name: Build Lenovo Z6 Lite / K10 Note (kunlun2) - dean27-noksu = dean27-ksu EXCEPT KernelSU/SukiSU is NOT compiled in (CONFIG_KSU is not set). Stock defconfig, deanlancer tree with SUBLEVEL 186, pure GCC 4.9. Control build: is the KSU hook set itself what kills the early boot?
+name: Build Lenovo Z6 Lite / K10 Note (kunlun2) - dean27-noksu = dean27-ksu EXCEPT KernelSU/SukiSU is NOT compiled in (CONFIG_KSU is not set). Stock defconfig, deanlancer tree with SUBLEVEL 186, pure GCC 4.9. Control build for whether the KSU hook set itself kills the early boot.
 
 on:
   workflow_call:
