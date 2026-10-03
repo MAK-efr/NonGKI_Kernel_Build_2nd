@@ -3,6 +3,10 @@ name: Build Xiaomi Mi 9 SE (grus, MIUI 12.5 A11)
 on:
   workflow_call:
   workflow_dispatch:
+  # push 触发：只在本文件变更时自动构建（本机无法直连 api.github.com 做 dispatch）
+  push:
+    branches: [mainline]
+    paths: ['.github/workflows/build-xiaomi-grus-miui12-a11.yml']
 
 env:
   # Device env
@@ -42,7 +46,11 @@ env:
   KERNELSU_AUTO_GET: "true"
   KERNELSU_AUTO_FORK: "sukisu"
 
-  SUSFS_ENABLE: false
+  # 2026-10-03: 开启 SUSFS —— 工厂补丁包有 susfs_patch_to_4.9.patch，
+  # patch-susfs 会打补丁（提供 linux/susfs.h）+ 自动注入全套 KSU_SUSFS 符号。
+  # builtin 分支 Kconfig: KSU_SUSFS depends on KSU && THREAD_INFO_IN_TASK，
+  # 工厂会自动补 CONFIG_THREAD_INFO_IN_TASK=y（4.9 支持）。
+  SUSFS_ENABLE: true
   SUSFS_FIXED: false
 
   AK3_SOURCE: "https://github.com/osm0sis/AnyKernel3.git"
@@ -137,18 +145,20 @@ jobs:
           grep -c '^CONFIG_' ./arch/arm64/configs/grus_defconfig
 
           echo "CONFIG_KSU=y" >> ./arch/arm64/configs/grus_defconfig
-          echo "CONFIG_KSU_TAMPER_SYSCALL_TABLE=y" >> ./arch/arm64/configs/grus_defconfig
-          # --- SUSFS must REALLY be off ---
-          # The factory's "Set KSU and SUSFS for DEFCONFIG" step appends
-          #   CONFIG_KSU_SUSFS=n
-          # but kconfig silently ignores that spelling; only
-          # "# CONFIG_X is not set" actually turns a symbol off. Without it
-          # SukiSU's kernel/Kconfig (config KSU_SUSFS / default y) leaves SUSFS
-          # ENABLED, so kernel_includes.h:77 pulls in the nonexistent header:
-          #   drivers/kernelsu/kernel_includes.h:77: fatal error:
-          #   'linux/susfs.h' file not found
-          echo "[+] Explicitly disabling CONFIG_KSU_SUSFS"
-          echo "# CONFIG_KSU_SUSFS is not set" >> ./arch/arm64/configs/grus_defconfig
+          # 2026-10-03: 删除 CONFIG_KSU_TAMPER_SYSCALL_TABLE=y —— builtin 分支
+          # Kconfig 无此符号，写了也是死代码（上次误判为死因之一）。
+          # 2026-10-03: SUSFS 由 SUSFS_ENABLE=true 走 patch-susfs 正式开启，
+          # 不再手工禁用（上次因缺 linux/susfs.h 被迫关闭，现补丁已就位）。
+
+          # --- 关闭内核 text/rodata 只读保护（H1 死因修复）---
+          # SukiSU 非 GKI 走 inline hook，需改写内核 text 段；stock config 的
+          # DEBUG_RODATA / DEBUG_ALIGN_RODATA / DEBUG_SET_MODULE_RONX 把
+          # text/rodata 锁只读 → 首次实测卡 logo、USB 不枚举、pstore 空。
+          # 全部关闭后 inline hook 落地。代价：内核失去该加固，root 场景接受。
+          echo "[+] Disabling rodata/text write protection for inline hooks"
+          echo "# CONFIG_DEBUG_RODATA is not set" >> ./arch/arm64/configs/grus_defconfig
+          echo "# CONFIG_DEBUG_ALIGN_RODATA is not set" >> ./arch/arm64/configs/grus_defconfig
+          echo "# CONFIG_DEBUG_SET_MODULE_RONX is not set" >> ./arch/arm64/configs/grus_defconfig
           tail -4 ./arch/arm64/configs/grus_defconfig
 
           sed -i 's/^static DEFINE_RWLOCK(policy_rwlock);$/DEFINE_RWLOCK(policy_rwlock);/' security/selinux/ss/services.c
