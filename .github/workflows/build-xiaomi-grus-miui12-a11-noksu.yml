@@ -1,0 +1,161 @@
+name: Build Xiaomi Mi 9 SE (grus, MIUI 12.5 A11) NoKSU Baseline
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    branches: [mainline]
+    paths: ['.github/workflows/build-xiaomi-grus-miui12-a11-noksu.yml']
+
+env:
+  DEVICE_NAME: "xiaomi_grus"
+  DEVICE_CODENAME: "grus"
+
+  CUSTOM_CMDS: "CLANG_TRIPLE=aarch64-linux-gnu-"
+  EXTRA_CMDS: "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/clang-custom/lib64"
+
+  KERNEL_SOURCE: "https://github.com/Gah0/android_xiaomi_kernel_grus.git"
+  KERNEL_BRANCH: "grus-r"
+
+  CLANG_SOURCE: "https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b.git"
+  CLANG_BRANCH: "lineage-20.0"
+
+  GCC_GNU: false
+  GCC_64_SOURCE: "https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git"
+  GCC_64_BRANCH: "lineage-19.1"
+  GCC_32_SOURCE: "https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9.git"
+  GCC_32_BRANCH: "lineage-19.1"
+
+  DEFCONFIG_SOURCE: ""
+  DEFCONFIG_NAME: "grus_defconfig"
+  DEFCONFIG_ORIGIN_IMAGE: ""
+  DEFCONFIG_FROM_BOOT: false
+
+  KERNELSU_SOURCE: ""
+  KERNELSU_BRANCH: ""
+  KERNELSU_AUTO_GET: "false"
+  KERNELSU_AUTO_FORK: ""
+
+  # 纯 stock 基线：不 patch SUSFS
+  SUSFS_ENABLE: false
+  SUSFS_FIXED: false
+
+  AK3_SOURCE: "https://github.com/osm0sis/AnyKernel3.git"
+  AK3_BRANCH: "master"
+
+  BOOT_SOURCE: ""
+
+  NEED_DTBO: false
+  NEED_SAFE_DTBO: false
+
+  ROM_TEXT: "miui12_a11_noksu"
+
+  PYTHON_VERSION: "3"
+
+  PACK_METHOD: "AnyKernel3"
+  PACK_KMODULES: "true"
+
+  KERNELSU_METHOD: "none"
+
+  PATCHES_SOURCE: "author/source"
+  PATCHES_BRANCH: "branch"
+
+  SUSFS_FOLDER_FIXED: ""
+  SUSFS_PATCH_FIXED: ""
+
+  REKERNEL_ENABLE: "false"
+  DROIDSPACES_ENABLE: "false"
+  NOMOUNT_ENABLE: "false"
+
+  HOOK_METHOD: ""
+
+  KPM_ENABLE: "false"
+  KPM_INLINE: "false"
+  KPM_KPATCH_NEXT: "false"
+  KPM_PATCH_SOURCE: ""
+
+  BASEBAND_GUARD_ENABLE: "false"
+  BASEBAND_GUARD_BOOT: "false"
+
+  GENERATE_DTB: "false"
+  GENERATE_CHIP: "qcom"
+
+  BUILD_DEBUGGER: "false"
+  SKIP_PATCH: "false"
+
+  BUILD_OTHER_CONFIG: "false"
+  MERGE_CONFIG_FILES: ""
+
+  FREE_MORE_SPACE: "false"
+
+jobs:
+  build-kernel:
+    name: Xiaomi Mi 9 SE (grus) NoKSU Baseline
+    runs-on: ubuntu-24.04
+    env:
+      CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_HARDLINK: "true"
+
+    steps:
+      - name: ⏰ Checkout repository
+        uses: actions/checkout@v6
+
+      - name: ⌛️ Compilation environment preparation
+        uses: ./.github/workflows/build-env
+
+      - name: ⚙️ Get necessary tools
+        uses: ./.github/workflows/build-ready
+
+      - name: 🪛 Extra Kernel Options
+        run: |
+          cd $GITHUB_WORKSPACE/device_kernel
+
+          # stock defconfig，一字不改（纯基线，无 KSU 无 SUSFS 无 RO 改动）
+          curl -sSL "https://raw.githubusercontent.com/MAK-efr/NonGKI_Kernel_Build_2nd/mainline/_defconfigs/grus_stock_defconfig" -o ./arch/arm64/configs/grus_defconfig
+          echo "--- defconfig sanity ---"
+          grep -c '^CONFIG_' ./arch/arm64/configs/grus_defconfig
+
+          # --- 树本身编译必需的最小修复（与 KSU/SUSFS 无关）---
+          sed -i 's/^static DEFINE_RWLOCK(policy_rwlock);$/DEFINE_RWLOCK(policy_rwlock);/' security/selinux/ss/services.c
+          # 不压 -w，让警告可见（基线要干净）
+
+          echo "[+] Allowing common symbols in host tools (-fcommon)"
+          echo "KBUILD_HOSTCFLAGS += -fcommon" >> Makefile
+          echo "HOSTCFLAGS += -fcommon" >> Makefile
+
+          echo "[+] Stubbing the xiaomi_touch.h that grus-r forgot"
+          mkdir -p drivers/input/touchscreen/xiaomi
+          printf '#ifndef __XIAOMI__TOUCH_H\n#define __XIAOMI__TOUCH_H\n#endif\n' > drivers/input/touchscreen/xiaomi/xiaomi_touch.h
+
+          echo "[+] Stubbing Goodix test_core entry points"
+          GC=drivers/input/touchscreen/tp_goodix_driver/goodix_ts_core.c
+          if [ -f "$GC" ] && ! grep -q 'int test_process(void \*dev)' "$GC"; then
+            printf 'static inline int test_process(void *dev) { return 0; }\nstatic inline int get_tp_rawdata(void *dev, char *buf, int *buf_size) { return 0; }\nstatic inline int get_tp_testcfg(void *dev, char *buf, int *buf_size) { return 0; }\n' > /tmp/gtstub.txt
+            cat /tmp/gtstub.txt "$GC" > /tmp/gtstub.c
+            mv /tmp/gtstub.c "$GC"
+          fi
+
+          echo "[+] Neutering the two unbuildable grus DTBs"
+          sed -i -e 's|^\(\s*\)grus-sdm710\.dtb *\\$|\1|' -e 's|^\(\s*\)grus-sdm712\.dtb$|\1|' arch/arm64/boot/dts/qcom/Makefile
+
+      - name: 🧰 Patch Kernel of Re:Kernel
+        uses: ./.github/workflows/patch-rekernel
+
+      - name: 💿 Patch Kernel of Droidspaces
+        uses: ./.github/workflows/patch-droidspaces
+
+      - name: 🔒 Patch Kernel of Baseband Guard
+        uses: ./.github/workflows/patch-baseband-guard
+
+      - name: 🛡️ Patch Kernel of NoMount
+        uses: ./.github/workflows/patch-nomount
+
+      - name: 🚀 Build Process
+        uses: ./.github/workflows/build-process
+
+      - name: 🔩 Pack Process
+        uses: ./.github/workflows/pack-process
+
+      - name: ✏️ Upload Artifacts
+        uses: ./.github/workflows/upload-files
