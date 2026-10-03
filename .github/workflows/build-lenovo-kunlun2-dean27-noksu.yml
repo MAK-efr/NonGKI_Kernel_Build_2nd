@@ -273,6 +273,10 @@ jobs:
           # dean27: the stock defconfig HAS CONFIG_DEBUG_KERNEL=y (the crippled
           # kunlun2_defconfig did not), so ban it here exactly like dean26 did.
           echo "# CONFIG_DEBUG_KERNEL is not set" >> $D
+          # dean27: kernel/sched/tune.c uses the STUNE_ASSIST-only wrappers in
+          # files[] unguarded (tree bug), so STUNE_ASSIST must be on.
+          echo "CONFIG_STUNE_ASSIST=y" >> $D
+          echo "CONFIG_DYNAMIC_STUNE_BOOST=y" >> $D
 
           # --- 0c. the tree's net/sctp/Makefile has a typo ------------------
           # 'stcp-$(CONFIG_DEBUG_KERNEL) += debug.o' - the misspelled prefix
