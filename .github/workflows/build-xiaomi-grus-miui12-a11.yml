@@ -185,8 +185,9 @@ jobs:
           # of USER_ARG_NULL the fetched SukiSU tree carries
           # (user_arg_null_ptr() or (&(struct user_arg_ptr){ 0 })).
           # Harmless: GRANT_ROOT sets should_skip_copy and never reads argv.
-          echo "[+] Fixing SukiSU sulog USER_ARG_NULL for non-SUSFS build"
-          sed -i 's/USER_ARG_NULL, gfp)/*(USER_ARG_NULL), gfp)/' drivers/kernelsu/sulog/event.c
+          echo "[+] SUSFS build: USER_ARG_NULL already correct in builtin, skip deref sed"
+          # 2026-10-03: 上次的 * 解引用 sed 是给「无 SUSFS」变体用的；SUSFS 开启后
+          # builtin 分支 USER_ARG_NULL 已是指针，加了 * 反而报 incompatible type。
           grep -n "USER_ARG_NULL" drivers/kernelsu/sulog/event.c || true
 
           # --- grus-r is missing drivers/input/touchscreen/xiaomi/ ---
