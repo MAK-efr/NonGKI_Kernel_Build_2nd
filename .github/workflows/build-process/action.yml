@@ -136,7 +136,7 @@ runs:
                 echo "[+] Pre-built SELinux done."
             fi
 
-            make -j$(nproc --all) O=out ARCH="${{ env.KERNEL_ARCH }}" 2>&1|tee error.log
+            make -k -j$(nproc --all) O=out ARCH="${{ env.KERNEL_ARCH }}" 2>&1|tee error.log
           fi
           }
 
