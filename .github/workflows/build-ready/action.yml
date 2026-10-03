@@ -251,7 +251,7 @@ runs:
       - name: SukiSU-Ultra Fixed
         shell: bash
         run: |
-          cd $GITHUB_WORKSPACE/device_kernel/drivers/kernelsu
+          cd $GITHUB_WORKSPACE/device_kernel/drivers/kernelsu 2>/dev/null || { echo "[-] no kernelsu dir (NoKSU baseline), skip"; exit 0; }
 
           if [[ "${{ env.KERNELSU_SOURCE }}" == *SukiSU* ]] || [[ "${{ env.KERNELSU_AUTO_FORK }}" == "sukisu" ]]; then
             cp /tmp/Patches/Patch/sukisu_ultra_fixed.patch ./
