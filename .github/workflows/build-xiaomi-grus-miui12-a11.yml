@@ -190,6 +190,20 @@ jobs:
           # builtin 分支 USER_ARG_NULL 已是指针，加了 * 反而报 incompatible type。
           grep -n "USER_ARG_NULL" drivers/kernelsu/sulog/event.c || true
 
+          # --- SukiSU SUSFS current_sid backport for 4.9 ---
+          # SUSFS 的 selinux.c 调 current_sid()，但 4.9 内核的 selinux 把它做成
+          # static inline 且不 EXPORT_SYMBOL，外部模块链接时报 undefined reference。
+          # 4.19 以下 selinux_cred(cred) 返回 task_security_struct*（.sid 可用），
+          # 且 selinux.c 编译上下文里 selinux_cred/task_security_struct 均已可见。
+          echo "[+] Injecting current_sid() backport for <4.19 kernels"
+          SELINUX_C=drivers/kernelsu/selinux/selinux.c
+          if ! grep -q 'static inline u32 current_sid' "$SELINUX_C"; then
+            printf '#if LINUX_VERSION_CODE <= KERNEL_VERSION(4, 19, 0)\nstatic inline u32 current_sid(void) { return selinux_cred(current_cred())->sid; }\n#endif\n' > /tmp/cursid.txt
+            cat /tmp/cursid.txt "$SELINUX_C" > /tmp/selinux_new.c
+            mv /tmp/selinux_new.c "$SELINUX_C"
+            head -6 "$SELINUX_C"
+          fi
+
           # --- grus-r is missing drivers/input/touchscreen/xiaomi/ ---
           # Every OTHER branch of Gah0/android_xiaomi_kernel_grus has that dir;
           # grus-r does not, yet tp_goodix_driver/goodix_ts_i2c.c:31 includes
