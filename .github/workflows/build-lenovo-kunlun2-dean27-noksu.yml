@@ -511,6 +511,15 @@ jobs:
           #         probing every token on its own.
           cp scripts/Kbuild.include /tmp/Kbuild.include.dean26.bak
           sed -i 's|$(1) -Werror $(2)|$(1) -Werror -Wno-error $(2)|' scripts/Kbuild.include
+          # dean27: kernel/cpuset.c guard for the unguarded
+          # cpuset_write_resmask_assist() (struct cs_target lives under
+          # #ifdef CONFIG_CPUSET_ASSIST, the function does not) -- keeps the
+          # compiled config stock-identical.
+          perl -0777 -i -pe 's/(static ssize_t cpuset_write_resmask_assist\(struct kernfs_open_file \*of,)/#ifdef CONFIG_CPUSET_ASSIST\n$1/; s/(\treturn cpuset_write_resmask\(of, tgt\.cpus, nbytes, off\);\n\})/$1\n#endif/' kernel/cpuset.c
+          n=$(grep -c 'CONFIG_CPUSET_ASSIST' kernel/cpuset.c)
+          echo "[+] cpuset.c CONFIG_CPUSET_ASSIST occurrences: $n (want 3, was 2)"
+          [ "$n" = "3" ] || { echo "[-] cpuset.c guard patch did not apply"; exit 1; }
+          perl -0777 -ne 'exit(index($_,"return cpuset_write_resmask(of, tgt.cpus, nbytes, off);\n}\n#endif")>=0?0:1)' kernel/cpuset.c || { echo "[-] cpuset.c #endif is not right after the helper"; exit 1; }
           echo "=== Kbuild.include __cc-option after patch ==="
           grep -n '__cc-option' scripts/Kbuild.include | head -5
           {
