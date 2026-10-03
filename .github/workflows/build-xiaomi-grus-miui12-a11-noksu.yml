@@ -120,7 +120,9 @@ jobs:
 
           # --- 树本身编译必需的最小修复（与 KSU/SUSFS 无关）---
           sed -i 's/^static DEFINE_RWLOCK(policy_rwlock);$/DEFINE_RWLOCK(policy_rwlock);/' security/selinux/ss/services.c
-          # 不压 -w，让警告可见（基线要干净）
+          # 2026-10-03: 恢复 -w —— 树有 exec_fs_sync_work 未声明等 -Werror 报错（与 KSU/SUSFS 无关），
+          # SUSFS 内核正是用 -w 编过的。恢复 -w 保证对照变量唯一（只差有没有 KSU）。
+          sed -i '/KBUILD_CFLAGS   :=/s//& -w/' Makefile
 
           echo "[+] Allowing common symbols in host tools (-fcommon)"
           echo "KBUILD_HOSTCFLAGS += -fcommon" >> Makefile
