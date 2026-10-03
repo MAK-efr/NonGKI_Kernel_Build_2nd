@@ -1,4 +1,4 @@
-name: Build Lenovo Z6 Lite / K10 Note (kunlun2) - dean27-ksu = dean26 EXCEPT the defconfig: the tree's own arch/arm64/configs/defconfig (the device's stock 4.9.186 .config) instead of the crippled kunlun2_defconfig. Same deanlancer tree (SUBLEVEL forced to 186), same pure GCC 4.9, same SukiSU integration.
+name: Build Lenovo Z6 Lite / K10 Note (kunlun2) - dean27-ksu = dean26 EXCEPT the defconfig, changed from the crippled kunlun2_defconfig to the tree own arch/arm64/configs/defconfig which is byte-identical to the device stock 4.9.186 .config. Same deanlancer tree (SUBLEVEL forced to 186), same pure GCC 4.9, same SukiSU integration.
 
 on:
   workflow_call:
