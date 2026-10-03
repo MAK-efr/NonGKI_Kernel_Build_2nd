@@ -17,8 +17,9 @@ env:
   KERNEL_SOURCE: "https://github.com/Gah0/android_xiaomi_kernel_grus.git"
   KERNEL_BRANCH: "grus-r"
 
-  CLANG_SOURCE: "https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b.git"
-  CLANG_BRANCH: "lineage-20.0"
+  # 第2轮对照：切 clang 11（r383902，Android 11 官方 kernel clang，最接近原厂 clang 10.0.7）
+  CLANG_SOURCE: "https://github.com/AOSP-10/prebuilts_clang_host_linux-x86_clang-r383902.git"
+  CLANG_BRANCH: "10"
 
   GCC_GNU: false
   GCC_64_SOURCE: "https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git"
@@ -48,7 +49,7 @@ env:
   NEED_DTBO: false
   NEED_SAFE_DTBO: false
 
-  ROM_TEXT: "miui12_a11_noksu"
+  ROM_TEXT: "miui12_a11_noksu_clang11"
 
   PYTHON_VERSION: "3"
 
