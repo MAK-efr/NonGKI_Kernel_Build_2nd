@@ -270,6 +270,9 @@ jobs:
           # DETECT_HUNG_TASK / BOOTPARAM_HUNG_TASK_PANIC / PANIC_ON_OOPS all
           # live under `menuconfig DEBUG_KERNEL`, so they are dropped too.
           echo "[+] tree defconfig + ABI extras: $(wc -l < $D) lines"
+          # dean27: the stock defconfig HAS CONFIG_DEBUG_KERNEL=y (the crippled
+          # kunlun2_defconfig did not), so ban it here exactly like dean26 did.
+          echo "# CONFIG_DEBUG_KERNEL is not set" >> $D
 
           # --- 0c. the tree's net/sctp/Makefile has a typo ------------------
           # 'stcp-$(CONFIG_DEBUG_KERNEL) += debug.o' - the misspelled prefix
