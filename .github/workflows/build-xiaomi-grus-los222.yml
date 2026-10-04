@@ -206,19 +206,27 @@ jobs:
           echo "HOSTCFLAGS += -fcommon" >> Makefile
 
           # ---- 5. 修复 KSU 在 4.9 上的符号缺失 (链接 undefined) ----
-          # 5a. -w 抑制 clang 海量警告; 同时 -DKSU_COMPAT_USE_STATIC_KEY 强制启用
-          #     compat 静态键路径: kernel_compat.h:254 定义该宏的条件是
-          #     LINUX_VERSION_CODE>=4.3.0, 但 selinux_hide.c / sucompat.c 并未
-          #     include 该头, 编译单元内宏未定义 -> ksu_selinux_hide_* 与
-          #     ksu_handle_post_execveat_sucompat 整段被 #ifdef 排除 -> 链接 undefined。
-          #     全局 -D 让所有 KSU .c 看到该宏 (内核其他文件不认此宏, 无害)。
-          sed -i '/KBUILD_CFLAGS   :=/s//& -w -DKSU_COMPAT_USE_STATIC_KEY/' Makefile
+          # 5a. 强制 KSU_COMPAT_USE_STATIC_KEY 进入相关 KSU 编译单元。
+          #     kernel_compat.h:254 在 LINUX_VERSION_CODE>=4.3.0 时定义该宏, 但
+          #     selinux_hide.c / sucompat.c 用 #ifdef 包裹 ksu_selinux_hide_* /
+          #     ksu_handle_post_execveat_sucompat 却未 include 该头 -> 编译单元内
+          #     宏未定义 -> 函数整段被排除 -> 链接 undefined。
+          #     上一轮用 Makefile KBUILD_CFLAGS -D 未生效 (4.9 顶层 Makefile 那行
+          #     未被匹配 / build-process 覆盖 CFLAGS), 故改为直接在源文件顶部注入
+          #     宏定义, 不依赖 CFLAGS 传播。已验证 current_sid 修复走的是同一步骤
+          #     (hooks.c 改动生效), 故本步确在 KSU 代码就位后执行。
+          grep -rl "KSU_COMPAT_USE_STATIC_KEY" drivers/kernelsu --include='*.c' 2>/dev/null | while read -r f; do
+            if ! grep -q "define KSU_COMPAT_USE_STATIC_KEY" "$f"; then
+              sed -i '1i #define KSU_COMPAT_USE_STATIC_KEY' "$f"
+              echo "[+] forced KSU_COMPAT_USE_STATIC_KEY in $f"
+            fi
+          done
           # 5b. 4.9 内核 current_sid 是 static inline (security/selinux/hooks.c:217),
-          #     KSU 的 susfs_get_current_sid() 直接调用却跨编译单元无法链接。
-          #     改为非 static 并 EXPORT_SYMBOL, 供 KSU 外部链接。
+          #     KSU 的 susfs_get_current_sid() 跨编译单元直接调用无法链接。
+          #     去 static 改普通全局函数 + EXPORT_SYMBOL (上一轮已验证此修复生效)。
           sed -i 's/static inline u32 current_sid(void)/u32 current_sid(void)/' security/selinux/hooks.c
           grep -q "EXPORT_SYMBOL(current_sid);" security/selinux/hooks.c || printf '\nEXPORT_SYMBOL(current_sid);\n' >> security/selinux/hooks.c
-          echo "[+] current_sid exported + KSU_COMPAT_USE_STATIC_KEY forced for KSU 4.9"
+          echo "[+] current_sid exported; KSU_COMPAT_USE_STATIC_KEY forced in drivers/kernelsu sources"
 
           # ---- 6. 版本字符串: 不写 .scmversion ----
           #     官方内核 vermagic = 4.9.337-perf+ 的 "+" 来自编译时 dirty tree
