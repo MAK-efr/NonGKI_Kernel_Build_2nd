@@ -250,7 +250,32 @@ jobs:
             fi
           done
 
-          echo "[+] KSU 4.9 fixes applied: current_sid export + KSU_COMPAT_USE_STATIC_KEY + selinux_hide prototypes"
+          # 5e. 4.9 不编译 selinux_hide 子系统: ksu.c:84 用
+          #     '#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,10,0)' 守卫
+          #     #include "feature/selinux_hide.c", 4.9 (<5.10) 整段排除; 但
+          #     ksud.c 无条件调用 ksu_selinux_hide_handle_* (57/219/291 行无守卫)
+          #     -> 链接 undefined。改该 #if 加 #else 分支, 提供 5 个空 stub
+          #     (签名匹配 feature/selinux_hide.h 原型), 4.9 链接通过
+          #     (selinux hide 功能在 4.9 不可用, 但 root 核心不受影响)。
+          KSU_MAIN=$(grep -rl '#include "feature/selinux_hide.c"' drivers/kernelsu --include='*.c' | head -1)
+          if [ -n "$KSU_MAIN" ]; then
+            perl -0pi -e 's{\Q#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)\E\n\Q#include "feature/selinux_hide.c"\E\n\Q#endif\E}{#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)\n#include "feature/selinux_hide.c"\n#else\nvoid ksu_selinux_hide_handle_second_stage(void) {}\nvoid ksu_selinux_hide_handle_post_fs_data(void) {}\nvoid ksu_selinux_hide_drop_backup_if_unused(void) {}\nvoid ksu_selinux_hide_init(void) {}\nvoid ksu_selinux_hide_exit(void) {}\n#endif}g' "$KSU_MAIN"
+            echo "[+] 4.9 selinux_hide stubs added in $KSU_MAIN"
+          else
+            echo "[!] WARN: ksu.c not found, skip 5e"
+          fi
+
+          # 5f. ksu_handle_post_execveat_sucompat: 内核 fs/exec.c:1860 (SukiSU exec
+          #     hook patch) 调用它, 但 SukiSU builtin 全树无此符号 (仅旧 KSU/GKI
+          #     有, 已改名/重构) -> 4.9 链接 undefined。在 ksu.c 末尾追加同签名
+          #     stub 返回 0 放行 (post-exec hook 在 4.9 非必需, su 兼容走主
+          #     ksu_handle_execveat_sucompat)。
+          if [ -n "$KSU_MAIN" ]; then
+            printf '\n#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)\nint ksu_handle_post_execveat_sucompat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags) {\n    return 0;\n}\n#endif\n' >> "$KSU_MAIN"
+            echo "[+] ksu_handle_post_execveat_sucompat stub added in $KSU_MAIN"
+          fi
+
+          echo "[+] KSU 4.9 fixes applied: current_sid export + KSU_COMPAT_USE_STATIC_KEY + selinux_hide prototypes + 4.9 stubs"
 
           # ---- 6. 版本字符串: 不写 .scmversion ----
           #     官方内核 vermagic = 4.9.337-perf+ 的 "+" 来自编译时 dirty tree
