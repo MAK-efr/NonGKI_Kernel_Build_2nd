@@ -334,7 +334,40 @@ jobs:
             exit 1
           fi
 
-          echo "[+] KSU 4.9 fixes applied: current_sid export + KSU_COMPAT_USE_STATIC_KEY + selinux_hide prototypes + 4.9 stubs + no __read_mostly + 5i setresuid hook"
+          # 5j. ★★ 2026-10-04 第二轮修复: 5i 之后钩子仍未装 fd, 加 manager 快通道 + 诊断
+          #     实测 (v3 内核, 07:19 构建, 已刷入并冷启 APP):
+          #       dmesg 启动段有 "Cached zygote SID: 72" -> susfs_zygote_sid 已就绪;
+          #       "install fd for manager" 计数仍为 0, 也完全没有 "Something wrong..."。
+          #     => ksu_handle_setresuid() 在 sid 比较处静默 return 0 (setresuid 时该进
+          #        程的 sid 已不是 u:r:zygote:s0), 与 Android 侧"先 setcon 再 setresuid"
+          #        的顺序一致。故不再依赖 sid: 在 cur_uid==0 之后直接判 manager appid。
+          LSM=$(find drivers/kernelsu -name 'lsm_hook.c' | head -1)
+          echo "[*] 5j: LSM=$LSM"
+          python3 - "$LSM" <<'PYEOF'
+          import sys
+          p = sys.argv[1]
+          s = open(p).read()
+          anchor = "    if (cur_uid != 0)\n        return 0;\n"
+          assert s.count(anchor) == 1, ("anchor count", s.count(anchor))
+          add = (
+              '    pr_info("ksu_setresuid: ruid=%d cur=%d sid=%u zygote=%u next=%u\\n",\n'
+              '            ruid, cur_uid, susfs_get_current_sid(), susfs_zygote_sid, susfs_zygote_next_sid);\n'
+              '    if (likely(ksu_is_manager_appid_valid()) && unlikely(is_uid_manager(ruid))) {\n'
+              '        disable_seccomp();\n'
+              '        pr_info("install fd for manager (fastpath): %d\\n", ruid);\n'
+              '        ksu_install_fd();\n'
+              '        return 0;\n'
+              '    }\n'
+          )
+          s = s.replace(anchor, anchor + add, 1)
+          open(p, "w").write(s)
+          k = s.count("install fd for manager (fastpath)")
+          print("[*] 5j patched", p, "len", len(s), "fastpath_count", k)
+          assert k == 1
+          PYEOF
+          grep -n -A9 "int ksu_handle_setresuid" "$LSM" | head -20
+
+          echo "[+] KSU 4.9 fixes applied: current_sid export + KSU_COMPAT_USE_STATIC_KEY + selinux_hide prototypes + 4.9 stubs + no __read_mostly + 5i setresuid hook + 5j manager fastpath"
 
           # ---- 6. 版本字符串: 不写 .scmversion ----
           #     官方内核 vermagic = 4.9.337-perf+ 的 "+" 来自编译时 dirty tree
