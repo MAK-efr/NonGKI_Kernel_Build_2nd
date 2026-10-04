@@ -1,0 +1,225 @@
+name: Build Xiaomi Mi 9 SE (grus, LineageOS 22.2 A15)
+
+# ============================================================================
+# 目标: 在 LineageOS 22.2 官方 sdm710 内核树 (4.9.337) 上集成 SukiSU Ultra + SUSFS
+#
+# 为什么换掉 MIUI 版 (build-xiaomi-grus-miui12-a11.yml):
+#   MIUI 时代用第三方 Gah0/grus-r 树 (4.9.227)，与 MIUI 闭源 vendor 二进制
+#   不匹配 -> 纯 stock 无 KSU 也死机。现系统已换 LineageOS 22.2，
+#   内核与 vendor 同源 (都是 LineageOS 出的)，死因消除。
+#
+# 关键差异 (相对 MIUI 版):
+#   1. KERNEL_SOURCE  -> LineageOS/android_kernel_xiaomi_sdm710 @ lineage-22.2
+#   2. defconfig      -> 设备 /proc/config.gz 提取的实配 (=官方配置, vermagic 一致)
+#   3. patch-no-kprobe -> 真正执行 (MIUI 版退化成 echo，疑为漏掉的关键步骤)
+#   4. 删除所有针对 Gah0/grus-r 树缺陷的补丁 (LOS 官方树不需要)
+#
+# 触发: 本文件变更时自动 push 构建 (本机无法直连 api.github.com 做 dispatch)
+# ============================================================================
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    branches: [mainline]
+    paths: ['.github/workflows/build-xiaomi-grus-los222.yml']
+
+env:
+  # Device env
+  DEVICE_NAME: "xiaomi_grus"
+  DEVICE_CODENAME: "grus"
+
+  # 内核 Makefile 在 clang + aarch64-linux-android- 前缀下强制要求 CLANG_TRIPLE
+  CUSTOM_CMDS: "CLANG_TRIPLE=aarch64-linux-gnu-"
+  EXTRA_CMDS: "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/clang-custom/lib64"
+
+  # ---- 内核源: LineageOS 官方 sdm710 树 (与设备 vendor 同源) ----
+  KERNEL_SOURCE: "https://github.com/LineageOS/android_kernel_xiaomi_sdm710.git"
+  KERNEL_BRANCH: "lineage-22.2"
+
+  # 工具链: 与工厂 pixel3a-lineageos22 模板一致
+  CLANG_SOURCE: "https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b.git"
+  CLANG_BRANCH: "lineage-20.0"
+
+  GCC_GNU: false
+  GCC_64_SOURCE: "https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git"
+  GCC_64_BRANCH: "lineage-19.1"
+  GCC_32_SOURCE: "https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9.git"
+  GCC_32_BRANCH: "lineage-19.1"
+
+  # defconfig 由 "Extra Kernel Options" 步骤从仓库内文件写入，
+  # 不走工厂的 URL 下载 (GitHub raw 在本机/CI 不可靠)。
+  DEFCONFIG_SOURCE: ""
+  DEFCONFIG_NAME: "grus_defconfig"
+  DEFCONFIG_ORIGIN_IMAGE: ""
+  DEFCONFIG_FROM_BOOT: false
+
+  KERNELSU_SOURCE: ""
+  KERNELSU_BRANCH: ""
+
+  KERNELSU_AUTO_GET: "true"
+  KERNELSU_AUTO_FORK: "sukisu"   # SukiSU-Ultra, 分支自动用 builtin
+
+  # SUSFS: THREAD_INFO_IN_TASK=y 已满足依赖 (见设备 config)
+  SUSFS_ENABLE: true
+  SUSFS_FIXED: false
+
+  AK3_SOURCE: "https://github.com/osm0sis/AnyKernel3.git"
+  AK3_BRANCH: "master"
+
+  BOOT_SOURCE: ""
+
+  NEED_DTBO: false
+  NEED_SAFE_DTBO: false
+
+  ROM_TEXT: "lineageos22_2_a15"
+
+  # Other env
+  PYTHON_VERSION: "3"
+
+  PACK_METHOD: "AnyKernel3"
+  # false: 不覆盖 /vendor 下原厂 9 个 .ko。自编内核 vermagic=4.9.337-perf+ 与官方
+  # 一致，原厂模块仍可加载。若改 true 有模块/vendor HAL 不匹配风险。
+  PACK_KMODULES: "false"
+
+  KERNELSU_METHOD: "shell"
+
+  PATCHES_SOURCE: ""
+  PATCHES_BRANCH: ""
+
+  SUSFS_FOLDER_FIXED: ""
+  SUSFS_PATCH_FIXED: ""
+
+  REKERNEL_ENABLE: "false"
+  DROIDSPACES_ENABLE: "false"
+  NOMOUNT_ENABLE: "false"
+
+  # 设备内核无 CONFIG_KPROBES -> 只能走 syscall manual hook
+  HOOK_METHOD: "syscall"
+
+  KPM_ENABLE: "false"        # CONFIG_KPROBES is not set -> KPM 不可用
+  KPM_INLINE: "false"
+  KPM_KPATCH_NEXT: "false"
+  KPM_PATCH_SOURCE: "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU_patch/refs/heads/main/kpm/patch_linux"
+
+  BASEBAND_GUARD_ENABLE: "false"
+  BASEBAND_GUARD_BOOT: "false"
+
+  GENERATE_DTB: "false"
+  GENERATE_CHIP: "qcom"
+
+  BUILD_DEBUGGER: "false"
+  SKIP_PATCH: "false"
+
+  BUILD_OTHER_CONFIG: "false"
+  MERGE_CONFIG_FILES: ""
+
+  FREE_MORE_SPACE: "false"
+
+jobs:
+  build-kernel:
+    name: Xiaomi Mi 9 SE (grus, LineageOS 22.2 A15)
+    runs-on: ubuntu-22.04
+    env:
+      CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_HARDLINK: "true"
+
+    steps:
+      - name: ⏰ Checkout repository
+        uses: actions/checkout@v6
+
+      - name: ⌛️ Compilation environment preparation
+        uses: ./.github/workflows/build-env
+
+      - name: ⚙️ Get necessary tools
+        uses: ./.github/workflows/build-ready
+
+      - name: 🪝 Patch Kernel of SUSFS
+        uses: ./.github/workflows/patch-susfs
+
+      # ★ 关键: MIUI 版把这步退化成了 echo，导致 4.9 无 kprobes 的 syscall
+      #   hook 修补从未执行。LOS 版恢复为真正调用。
+      - name: 🔗 Patch for no-kprobe
+        uses: ./.github/workflows/patch-no-kprobe
+
+      - name: 🪛 Extra Kernel Options
+        run: |
+          cd $GITHUB_WORKSPACE/device_kernel
+
+          # ---- 1. 用设备实配 config 作 defconfig (vermagic 与官方一致) ----
+          #     _defconfigs/grus_los222_defconfig 由 push_defconfig.py 从
+          #     设备 /proc/config.gz 提取后推入本仓库。
+          CFG="_defconfigs/grus_los222_defconfig"
+          if [ ! -f "$CFG" ]; then
+            echo "[-] $CFG not found; fallback to factory grus_stock_defconfig"
+            cp /tmp/Patches/../../_defconfigs/grus_stock_defconfig ./arch/arm64/configs/grus_defconfig 2>/dev/null || true
+          else
+            cp "$CFG" ./arch/arm64/configs/grus_defconfig
+          fi
+          echo "--- defconfig head ---"
+          head -n 5 ./arch/arm64/configs/grus_defconfig
+          echo "--- sanity (should be ~1675) ---"
+          grep -c '^CONFIG_' ./arch/arm64/configs/grus_defconfig
+
+          # ---- 2. 开启 KSU + 完整 SUSFS 子项 ----
+          # 注意: 上面 cp 已覆盖 build-ready/patch-susfs 对 grus_defconfig 的
+          # 追加, 故此处完整重建 KSU + SUSFS, 不可遗漏任一子项 (否则 SUSFS
+          # 功能不会被编译进内核, 丧失"隐藏"能力)。
+          {
+            echo "CONFIG_KSU=y"
+            echo "CONFIG_KSU_SUSFS=y"
+            echo "CONFIG_KSU_SUSFS_SUS_PATH=y"
+            echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y"
+            echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y"
+            echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y"
+            echo "CONFIG_KSU_SUSFS_ENABLE_LOG=y"
+            echo "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y"
+            echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y"
+            echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y"
+            echo "CONFIG_KSU_SUSFS_SUS_MAP=y"
+            echo "CONFIG_THREAD_INFO_IN_TASK=y"
+          } >> ./arch/arm64/configs/grus_defconfig
+
+          # ---- 3. 关闭内核 text/rodata 只读保护 (inline hook 必需) ----
+          echo "[+] Disabling rodata/text write protection for inline hooks"
+          echo "# CONFIG_DEBUG_RODATA is not set" >> ./arch/arm64/configs/grus_defconfig
+          echo "# CONFIG_DEBUG_ALIGN_RODATA is not set" >> ./arch/arm64/configs/grus_defconfig
+          echo "# CONFIG_DEBUG_SET_MODULE_RONX is not set" >> ./arch/arm64/configs/grus_defconfig
+          tail -5 ./arch/arm64/configs/grus_defconfig
+
+          # ---- 4. HOST TOOLS FIX (GCC >= 10, 4.9 树的 yylloc 多重定义) ----
+          echo "[+] Allowing common symbols in host tools (-fcommon)"
+          echo "KBUILD_HOSTCFLAGS += -fcommon" >> Makefile
+          echo "HOSTCFLAGS += -fcommon" >> Makefile
+
+          # ---- 5. 抑制 4.9 树在新 clang 下的海量警告 ----
+          sed -i '/KBUILD_CFLAGS   :=/s//& -w/' Makefile
+
+          # ---- 6. 版本字符串: 不写 .scmversion ----
+          #     官方内核 vermagic = 4.9.337-perf+ 的 "+" 来自编译时 dirty tree
+          #     (KSU/SUSFS patch 改动了源码)。写 .scmversion 会覆盖成
+          #     -g<hash>, 破坏与 /vendor 下 9 个预编译 .ko 的 vermagic 一致
+          #     性, 导致模块加载失败。故留空, 让 setlocalversion 自然生成 "+"。
+
+      # ---- 以下 patch 步骤保持工厂默认 (不启用时不生效) ----
+      - name: 🧰 Patch Kernel of Re:Kernel
+        uses: ./.github/workflows/patch-rekernel
+
+      - name: 💿 Patch Kernel of Droidspaces
+        uses: ./.github/workflows/patch-droidspaces
+
+      - name: 🔒 Patch Kernel of Baseband Guard
+        uses: ./.github/workflows/patch-baseband-guard
+
+      - name: 🛡️ Patch Kernel of NoMount
+        uses: ./.github/workflows/patch-nomount
+
+      - name: 🚀 Build Process
+        uses: ./.github/workflows/build-process
+
+      - name: 🔩 Pack Process
+        uses: ./.github/workflows/pack-process
+
+      - name: ✏️ Upload Artifacts
+        uses: ./.github/workflows/upload-files
