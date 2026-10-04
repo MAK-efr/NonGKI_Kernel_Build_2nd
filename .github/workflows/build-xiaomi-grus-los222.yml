@@ -341,14 +341,24 @@ jobs:
           #     => ksu_handle_setresuid() 在 sid 比较处静默 return 0 (setresuid 时该进
           #        程的 sid 已不是 u:r:zygote:s0), 与 Android 侧"先 setcon 再 setresuid"
           #        的顺序一致。故不再依赖 sid: 在 cur_uid==0 之后直接判 manager appid。
-          LSM=$(find drivers/kernelsu -name 'lsm_hook.c' | head -1)
+          LSM=$(grep -rl --include='*.c' "int ksu_handle_setresuid(uid_t" drivers/kernelsu 2>/dev/null | head -1)
           echo "[*] 5j: LSM=$LSM"
+          if [ -z "$LSM" ]; then
+            echo "[*] 5j candidates (contains ksu_handle_setresuid):"
+            grep -rln "ksu_handle_setresuid" drivers/kernelsu | head -20
+            echo "[-] FATAL: 5j could not locate the ksu_handle_setresuid definition file"
+            exit 1
+          fi
           python3 - "$LSM" <<'PYEOF'
           import sys
           p = sys.argv[1]
           s = open(p).read()
           anchor = "int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid)\n{\n    uid_t cur_uid = current_uid().val;\n"
-          assert s.count(anchor) == 1, ("anchor count", s.count(anchor))
+          if s.count(anchor) != 1:
+              i = s.find("ksu_handle_setresuid")
+              print("[!] anchor count=%d; context around first hit:" % s.count(anchor))
+              print(s[max(0, i - 400):i + 700])
+              raise SystemExit("5j anchor mismatch")
           add = (
               '    pr_info("ksu_setresuid: ruid=%d cur=%d sid=%u zygote=%u next=%u\\n",\n'
               '            ruid, cur_uid, susfs_get_current_sid(), susfs_zygote_sid, susfs_zygote_next_sid);\n'
