@@ -275,7 +275,29 @@ jobs:
             echo "[+] ksu_handle_post_execveat_sucompat stub added in $KSU_MAIN"
           fi
 
-          echo "[+] KSU 4.9 fixes applied: current_sid export + KSU_COMPAT_USE_STATIC_KEY + selinux_hide prototypes + 4.9 stubs"
+          # 5g. ARM64 重定位溢出 (vmlinux 链接期):
+          #     `ksu_su_compat_enabled` 在 sucompat.c:4 定义为
+          #     `bool ksu_su_compat_enabled __read_mostly = true;`。
+          #     arch/arm64/include/asm/cache.h:35 ->
+          #       #define __read_mostly __attribute__((__section__(".data..read_mostly")))
+          #     该段被 arm64 vmlinux.lds.S:161 的 RO_DATA 收编, 位于 .text 之后
+          #     的只读区。sdm710 内核庞大(含 qcacld 等巨型驱动),
+          #     fs/built-in.o 的 .text 到 drivers/built-in.o 的 .data..read_mostly
+          #     偏移超 ±2GB; 跨单元 READ_ONCE(ksu_su_compat_enabled) 用 32 位
+          #     绝对寻址 -> `relocation truncated to fit: R_AARCH64_LDST32_ABS_LO12_NC`。
+          #     (arm64 Makefile:108 -mcmodel=large 仅对模块生效, vmlinux 用 small model。)
+          #     修法: 去 __read_mostly 让它进普通 .data 段(紧随 .text, 远在 2GB 内)。
+          grep -rl "ksu_su_compat_enabled" drivers/kernelsu --include='*.c' 2>/dev/null | while read -r f; do
+            sed -i 's/ksu_su_compat_enabled __read_mostly/ksu_su_compat_enabled/' "$f"
+            echo "[+] dropped __read_mostly on ksu_su_compat_enabled in $f"
+          done
+          #     兜底: 其余 KSU __read_mostly 变量同样去属性, 避免同类溢出。
+          grep -rl "__read_mostly" drivers/kernelsu --include='*.c' 2>/dev/null | while read -r f; do
+            sed -i 's/[[:space:]]__read_mostly//g' "$f"
+            echo "[+] stripped remaining __read_mostly in $f"
+          done
+
+          echo "[+] KSU 4.9 fixes applied: current_sid export + KSU_COMPAT_USE_STATIC_KEY + selinux_hide prototypes + 4.9 stubs + no __read_mostly"
 
           # ---- 6. 版本字符串: 不写 .scmversion ----
           #     官方内核 vermagic = 4.9.337-perf+ 的 "+" 来自编译时 dirty tree
