@@ -155,17 +155,21 @@ jobs:
           # 否则会找不到文件并 fallback 到工厂 grus_stock_defconfig -> NR_CPUS 过大 -> 编译 #error)。
           CFG="$GITHUB_WORKSPACE/_defconfigs/grus_los222_defconfig"
           if [ ! -f "$CFG" ]; then
-            echo "[-] $CFG not found; fallback to factory grus_stock_defconfig"
-            cp "$GITHUB_WORKSPACE/_defconfigs/grus_stock_defconfig" ./arch/arm64/configs/grus_defconfig 2>/dev/null || true
-          else
-            cp "$CFG" ./arch/arm64/configs/grus_defconfig
+            echo "[-] FATAL: $CFG not found (defconfig missing) -> abort"
+            exit 1
           fi
+          cp "$CFG" ./arch/arm64/configs/grus_defconfig
           echo "--- defconfig head ---"
           head -n 5 ./arch/arm64/configs/grus_defconfig
-          echo "--- NR_CPUS (MUST be 8, else fallback was wrongly used) ---"
+          echo "--- sanity: CONFIG_ line count MUST be >= 1500 ---"
+          CNT=$(grep -c '^CONFIG_' ./arch/arm64/configs/grus_defconfig)
+          echo "CONFIG_ count = $CNT"
+          if [ "$CNT" -lt 1500 ]; then
+            echo "[-] FATAL: defconfig too small ($CNT lines) -> would silently degrade to factory default (NR_CPUS=64 -> sched.h:954 #error). Abort."
+            exit 1
+          fi
+          echo "--- NR_CPUS (MUST be 8) ---"
           grep -n "CONFIG_NR_CPUS" ./arch/arm64/configs/grus_defconfig
-          echo "--- sanity (should be ~1675) ---"
-          grep -c '^CONFIG_' ./arch/arm64/configs/grus_defconfig
 
           # ---- 2. 开启 KSU + 完整 SUSFS 子项 ----
           # 注意: 上面 cp 已覆盖 build-ready/patch-susfs 对 grus_defconfig 的
@@ -184,22 +188,37 @@ jobs:
             echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y"
             echo "CONFIG_KSU_SUSFS_SUS_MAP=y"
             echo "CONFIG_THREAD_INFO_IN_TASK=y"
+            echo "CONFIG_NR_CPUS=8"
           } >> ./arch/arm64/configs/grus_defconfig
 
-          # ---- 3. 关闭内核 text/rodata 只读保护 (inline hook 必需) ----
-          echo "[+] Disabling rodata/text write protection for inline hooks"
-          echo "# CONFIG_DEBUG_RODATA is not set" >> ./arch/arm64/configs/grus_defconfig
-          echo "# CONFIG_DEBUG_ALIGN_RODATA is not set" >> ./arch/arm64/configs/grus_defconfig
-          echo "# CONFIG_DEBUG_SET_MODULE_RONX is not set" >> ./arch/arm64/configs/grus_defconfig
-          tail -5 ./arch/arm64/configs/grus_defconfig
+          # ---- 3. rodata/text 只读保护 (已删除) ----
+          # 实测: LOS sdm710 树的 DEBUG_RODATA 是 def_bool y, 写 "is not set"
+          # 会被 olddefconfig 丢弃; DEBUG_ALIGN_RODATA / DEBUG_SET_MODULE_RONX
+          # 与 syscall 表无关。SukiSU Ultra 的 sukisu_ultra_fixed.patch 自行
+          # 处理 text 段可写, 故此处不强行改 rodata (改了也无效, 反成噪音)。
+          echo "[*] rodata lines intentionally omitted (LOS tree def_bool y + SukiSU self-patches)"
+
+          tail -8 ./arch/arm64/configs/grus_defconfig
 
           # ---- 4. HOST TOOLS FIX (GCC >= 10, 4.9 树的 yylloc 多重定义) ----
           echo "[+] Allowing common symbols in host tools (-fcommon)"
           echo "KBUILD_HOSTCFLAGS += -fcommon" >> Makefile
           echo "HOSTCFLAGS += -fcommon" >> Makefile
 
-          # ---- 5. 抑制 4.9 树在新 clang 下的海量警告 ----
-          sed -i '/KBUILD_CFLAGS   :=/s//& -w/' Makefile
+          # ---- 5. 修复 KSU 在 4.9 上的符号缺失 (链接 undefined) ----
+          # 5a. -w 抑制 clang 海量警告; 同时 -DKSU_COMPAT_USE_STATIC_KEY 强制启用
+          #     compat 静态键路径: kernel_compat.h:254 定义该宏的条件是
+          #     LINUX_VERSION_CODE>=4.3.0, 但 selinux_hide.c / sucompat.c 并未
+          #     include 该头, 编译单元内宏未定义 -> ksu_selinux_hide_* 与
+          #     ksu_handle_post_execveat_sucompat 整段被 #ifdef 排除 -> 链接 undefined。
+          #     全局 -D 让所有 KSU .c 看到该宏 (内核其他文件不认此宏, 无害)。
+          sed -i '/KBUILD_CFLAGS   :=/s//& -w -DKSU_COMPAT_USE_STATIC_KEY/' Makefile
+          # 5b. 4.9 内核 current_sid 是 static inline (security/selinux/hooks.c:217),
+          #     KSU 的 susfs_get_current_sid() 直接调用却跨编译单元无法链接。
+          #     改为非 static 并 EXPORT_SYMBOL, 供 KSU 外部链接。
+          sed -i 's/static inline u32 current_sid(void)/u32 current_sid(void)/' security/selinux/hooks.c
+          grep -q "EXPORT_SYMBOL(current_sid);" security/selinux/hooks.c || printf '\nEXPORT_SYMBOL(current_sid);\n' >> security/selinux/hooks.c
+          echo "[+] current_sid exported + KSU_COMPAT_USE_STATIC_KEY forced for KSU 4.9"
 
           # ---- 6. 版本字符串: 不写 .scmversion ----
           #     官方内核 vermagic = 4.9.337-perf+ 的 "+" 来自编译时 dirty tree
