@@ -205,28 +205,53 @@ jobs:
           echo "KBUILD_HOSTCFLAGS += -fcommon" >> Makefile
           echo "HOSTCFLAGS += -fcommon" >> Makefile
 
-          # ---- 5. 修复 KSU 在 4.9 上的符号缺失 (链接 undefined) ----
-          # 5a. 强制 KSU_COMPAT_USE_STATIC_KEY 进入相关 KSU 编译单元。
-          #     kernel_compat.h:254 在 LINUX_VERSION_CODE>=4.3.0 时定义该宏, 但
-          #     selinux_hide.c / sucompat.c 用 #ifdef 包裹 ksu_selinux_hide_* /
-          #     ksu_handle_post_execveat_sucompat 却未 include 该头 -> 编译单元内
-          #     宏未定义 -> 函数整段被排除 -> 链接 undefined。
-          #     上一轮用 Makefile KBUILD_CFLAGS -D 未生效 (4.9 顶层 Makefile 那行
-          #     未被匹配 / build-process 覆盖 CFLAGS), 故改为直接在源文件顶部注入
-          #     宏定义, 不依赖 CFLAGS 传播。已验证 current_sid 修复走的是同一步骤
-          #     (hooks.c 改动生效), 故本步确在 KSU 代码就位后执行。
+          # ---- 5. 修复 SukiSU builtin 在 4.9 上的适配缺口 ----
+          # 5a. KSU_COMPAT_USE_STATIC_KEY 宏:
+          #     kernel_compat.h:254 在 LINUX_VERSION_CODE>=4.3.0 定义它, 但
+          #     feature/selinux_hide.c / feature/sucompat.c 用 #ifdef 包裹函数定义
+          #     却未 include 该头 -> 编译单元内宏未定义 -> 函数整段被排除 -> 链接
+          #     undefined。4.9 有 jump_label (DEFINE_STATIC_KEY_TRUE), 强制宏安全。
+          #     直接在相关 .c 顶部注入宏定义 (上一轮已验证此路可使 selinux_hide.c /
+          #     sucompat.c 定义编译进内核)。
           grep -rl "KSU_COMPAT_USE_STATIC_KEY" drivers/kernelsu --include='*.c' 2>/dev/null | while read -r f; do
             if ! grep -q "define KSU_COMPAT_USE_STATIC_KEY" "$f"; then
               sed -i '1i #define KSU_COMPAT_USE_STATIC_KEY' "$f"
               echo "[+] forced KSU_COMPAT_USE_STATIC_KEY in $f"
             fi
           done
-          # 5b. 4.9 内核 current_sid 是 static inline (security/selinux/hooks.c:217),
-          #     KSU 的 susfs_get_current_sid() 跨编译单元直接调用无法链接。
-          #     去 static 改普通全局函数 + EXPORT_SYMBOL (上一轮已验证此修复生效)。
+
+          # 5b. current_sid 内核侧: 4.9 是 static inline (security/selinux/hooks.c:217,
+          #     不在 security.h 声明), 其他编译单元无法链接/看到。改为普通全局函数
+          #     + EXPORT_SYMBOL, 供 KSU 外部链接 (上一轮已验证生效)。
           sed -i 's/static inline u32 current_sid(void)/u32 current_sid(void)/' security/selinux/hooks.c
           grep -q "EXPORT_SYMBOL(current_sid);" security/selinux/hooks.c || printf '\nEXPORT_SYMBOL(current_sid);\n' >> security/selinux/hooks.c
-          echo "[+] current_sid exported; KSU_COMPAT_USE_STATIC_KEY forced in drivers/kernelsu sources"
+
+          # 5c. KSU 侧 current_sid 无声明: kernel/selinux/selinux.c 直接调用
+          #     current_sid() (susfs_get_current_sid 等), 但 KSU 未声明它
+          #     (objsec.h 无 current_sid(void) -> KSU_COMPAT_HAS_CURRENT_SID 未定义)。
+          #     在该文件顶部补 extern 声明。
+          KSU_SELINUX=drivers/kernelsu/kernel/selinux/selinux.c
+          if [ -f "$KSU_SELINUX" ]; then
+            grep -q "extern u32 current_sid" "$KSU_SELINUX" || sed -i '1i extern u32 current_sid(void);' "$KSU_SELINUX"
+            echo "[+] added extern current_sid to $KSU_SELINUX"
+          else
+            echo "[!] WARN: $KSU_SELINUX not found, skip 5c"
+          fi
+
+          # 5d. ksud.c 调用 ksu_selinux_hide_* 但不 include selinux_hide.h
+          #     (原型在 .h 里无条件声明, 但调用方看不到) -> implicit declaration。
+          #     直接在该文件顶部补与 selinux_hide.h 一致的函数原型。
+          KSU_KSUD=drivers/kernelsu/kernel/runtime/ksud.c
+          if [ -f "$KSU_KSUD" ]; then
+            if ! grep -q "ksu_selinux_hide_handle_second_stage(void)" "$KSU_KSUD"; then
+              sed -i '1i void ksu_selinux_hide_handle_second_stage(void); void ksu_selinux_hide_handle_post_fs_data(void); void ksu_selinux_hide_drop_backup_if_unused(void); void ksu_selinux_hide_init(void); void ksu_selinux_hide_exit(void);' "$KSU_KSUD"
+              echo "[+] added selinux_hide prototypes to $KSU_KSUD"
+            fi
+          else
+            echo "[!] WARN: $KSU_KSUD not found, skip 5d"
+          fi
+
+          echo "[+] KSU 4.9 fixes applied: current_sid export + KSU_COMPAT_USE_STATIC_KEY + selinux_hide prototypes"
 
           # ---- 6. 版本字符串: 不写 .scmversion ----
           #     官方内核 vermagic = 4.9.337-perf+ 的 "+" 来自编译时 dirty tree
