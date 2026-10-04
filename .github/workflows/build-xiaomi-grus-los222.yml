@@ -150,15 +150,20 @@ jobs:
           # ---- 1. 用设备实配 config 作 defconfig (vermagic 与官方一致) ----
           #     _defconfigs/grus_los222_defconfig 由 push_defconfig.py 从
           #     设备 /proc/config.gz 提取后推入本仓库。
-          CFG="_defconfigs/grus_los222_defconfig"
+          # 注意: 本步已 cd 到 $GITHUB_WORKSPACE/device_kernel,
+          # 故 _defconfigs 必须用 $GITHUB_WORKSPACE 绝对路径 (不能用相对路径,
+          # 否则会找不到文件并 fallback 到工厂 grus_stock_defconfig -> NR_CPUS 过大 -> 编译 #error)。
+          CFG="$GITHUB_WORKSPACE/_defconfigs/grus_los222_defconfig"
           if [ ! -f "$CFG" ]; then
             echo "[-] $CFG not found; fallback to factory grus_stock_defconfig"
-            cp /tmp/Patches/../../_defconfigs/grus_stock_defconfig ./arch/arm64/configs/grus_defconfig 2>/dev/null || true
+            cp "$GITHUB_WORKSPACE/_defconfigs/grus_stock_defconfig" ./arch/arm64/configs/grus_defconfig 2>/dev/null || true
           else
             cp "$CFG" ./arch/arm64/configs/grus_defconfig
           fi
           echo "--- defconfig head ---"
           head -n 5 ./arch/arm64/configs/grus_defconfig
+          echo "--- NR_CPUS (MUST be 8, else fallback was wrongly used) ---"
+          grep -n "CONFIG_NR_CPUS" ./arch/arm64/configs/grus_defconfig
           echo "--- sanity (should be ~1675) ---"
           grep -c '^CONFIG_' ./arch/arm64/configs/grus_defconfig
 
