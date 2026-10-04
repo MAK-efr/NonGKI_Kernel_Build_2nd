@@ -297,57 +297,44 @@ jobs:
             echo "[+] stripped remaining __read_mostly in $f"
           done
 
-          # 5h. manager 认领 (track_throne) 在 4.9 上静默失效 —— 加诊断探针。
-          #     现场观测 (2026-10-04, grus + LOS22.2 + 4.9.337):
-          #       dmesg 出现 "packages.list detected (mask=134217856)"
-          #       -> fsnotify 回调正常, file_name 正确解析为 packages.list
-          #       -> track_throne(false) 被调用
-          #       但后续 "Searching manager..." / "got magic!" / "Found new base.apk"
-          #       / "Crowning manager" 一条都没有 -> 说明在 track_throne 内部
-          #       提前 return 或在 search_manager 里第一层就 goto skip_iterate。
-          #     后果: ksu_manager_appid 保持 -1 -> allowlist 空 -> 所有 su 被
-          #           __ksu_is_allow_uid_for_current() 拒绝 -> APP 显示"未检测到驱动"。
-          #     本段在关键分支插 printk, 用 dmesg 精确定位断点。
-          THRONE=$(grep -rl "void track_throne(bool prune_only)" drivers/kernelsu --include='*.c' | head -1)
-          OBSV=$(grep -rl "packages.list detected" drivers/kernelsu --include='*.c' | head -1)
-          echo "[*] 5h: THRONE=$THRONE"
-          echo "[*] 5h: OBSV=$OBSV"
-
-          if [ -n "$THRONE" ]; then
-            # 5h-1. track_throne 入口 (用 { } 包成独立语句块, 规避 gnu89
-            #       -Werror=declaration-after-statement: 探针不得插在变量声明之前)
-            perl -0pi -e 's{\Qvoid track_throne(bool prune_only)\E\n\Q{\E}{void track_throne(bool prune_only)\n{\n    { pr_info("KSU5H: track_throne enter, prune_only=%d\\n", (int)prune_only); }}g' "$THRONE"
-
-            # 5h-2. filp_open 失败分支
-            perl -0pi -e 's{\Q        pr_err("%s: open " SYSTEM_PACKAGES_LIST_PATH " failed: %ld\n", __func__, PTR_ERR(fp));\E}{        pr_err("KSU5H: track_throne filp_open FAILED: %ld\\n", PTR_ERR(fp));\n        pr_err("%s: open " SYSTEM_PACKAGES_LIST_PATH " failed: %ld\\n", __func__, PTR_ERR(fp));}g' "$THRONE"
-
-            # 5h-3. 读完 packages.list 后, uid_list 条目数
-            perl -0pi -e 's{\Q    // now update uid list\E}{    {\n        int __cnt = 0;\n        struct uid_data *__np;\n        list_for_each_entry(__np, &uid_list, list) __cnt++;\n        pr_info("KSU5H: track_throne read %d uid entries, manager_appid=%d\\n", __cnt, (int)ksu_get_manager_appid());\n    }\n    // now update uid list}g' "$THRONE"
-
-            # 5h-4. manager_exist 判定结果: 仅在其前面插一行 printk, 结尾保持 '{' 原样
-            perl -0pi -e 's{\Q    if (!manager_exist) {\E}{    pr_info("KSU5H: manager_exist=%d, appid_valid=%d\\n", (int)manager_exist, (int)ksu_is_manager_appid_valid());\n    if (!manager_exist) {g' "$THRONE"
-
-            # 5h-5. search_manager 入口 + 每层 iterate 前 (均用 { } 包块, 规避
-            #       其后紧邻的 int i / struct file 声明触发 gnu89 警告转错误)
-            perl -0pi -e 's{\Qvoid search_manager(const char *path, int depth, struct list_head *uid_data)\E\n\Q{\E}{void search_manager(const char *path, int depth, struct list_head *uid_data)\n{\n    { pr_info("KSU5H: search_manager enter path=%s depth=%d\\n", path, depth); }}g' "$THRONE"
-
-            perl -0pi -e 's{\Q            struct file *file = filp_open(pos->dirpath, O_RDONLY | O_NOFOLLOW | O_DIRECTORY, 0);\E}{            { pr_info("KSU5H: search_manager iterate depth=%d dir=%s\\n", pos->depth, pos->dirpath); }\n            struct file *file = filp_open(pos->dirpath, O_RDONLY | O_NOFOLLOW | O_DIRECTORY, 0);}g' "$THRONE"
-
-            perl -0pi -e 's{\Q                    pr_info("%s: dir: %s got magic! 0x%lx\n", __func__, pos->dirpath, data_app_magic);\E}{                    pr_info("KSU5H: got magic! dir=%s magic=0x%lx\\n", pos->dirpath, data_app_magic);}g' "$THRONE"
-
-            # 5h-6. my_actor 里看到的每个条目名 + d_type (定位 f2fs d_type 是否 DT_UNKNOWN)
-            perl -0pi -e 's{\Q    if (!strncmp(name, "..", namelen) || !strncmp(name, ".", namelen))\E}{    pr_info("KSU5H: actor name=%.*s d_type=%u\\n", (int)namelen, name, (unsigned)d_type);\n    if (!strncmp(name, "..", namelen) || !strncmp(name, ".", namelen))}g' "$THRONE"
-
-            # 5h-7. candidate_path 判定 + is_manager_apk 结果
-            perl -0pi -e 's{\Q            bool is_manager = is_manager_apk(candidate_path);\E}{            bool is_manager = is_manager_apk(candidate_path);\n            pr_info("KSU5H: candidate=%s is_manager=%d\\n", candidate_path, (int)is_manager);}g' "$THRONE"
-
-            echo "[+] 5h probes injected into $THRONE"
-            grep -c "KSU5H" "$THRONE" | sed 's/^/[+] 5h probe count: /'
+          # 5i. ★ 2026-10-04 根因修复: 接上 4.9 的 setresuid -> ksu_install_fd 钩子
+          #     根因 (源码 + 镜像字符串 + 设备实测 三方确证):
+          #       builtin 树 drivers/kernelsu/kernel/hook/lsm_hook.c
+          #         :19  #ifdef CONFIG_KSU_SUSFS
+          #         :132 int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid)
+          #         :149 #else  -> static int ksu_task_fix_setuid(...)
+          #         :183 #ifndef CONFIG_KSU_SUSFS
+          #         :184 LSM_HOOK_INIT(task_fix_setuid, ksu_task_fix_setuid),
+          #         :185 #endif
+          #       即 CONFIG_KSU_SUSFS=y 时 LSM task_fix_setuid 不注册, 且 builtin 树
+          #       里没有任何人调用 ksu_handle_setresuid -> setuid 钩子彻底缺失 ->
+          #       dmesg 永不出现 "install fd for manager: 10187" -> APP 的
+          #       scan_driver_fd() 扫 /proc/self/fd 找不到 "[ksu_driver]" ->
+          #       ksuctl 用 ioctl(-1) 得 EBADF -> get_info() 版本 0 -> 首页"不支持"。
+          #       (CI 的 susfs_inline_hook_patches.sh:225-240 只对 maj<4 的内核插
+          #        此钩子, 4.9 的 FIRST_VERSION=4 不满足 "<4", 整段被跳过。)
+          #     修法: 抄上游 syscall_hook_patches.sh:348-349, 往 LOS kernel/sys.c
+          #       的 setresuid 系统调用里插调用。锚点已核对存在:
+          #         sys.c:585 SYSCALL_DEFINE3(setresuid, uid_t, ruid, uid_t, euid, uid_t, suid)
+          #         sys.c:591 kuid_t kruid, keuid, ksuid;
+          #       插入点在 prepare_creds 之前, current_uid() 仍是旧 uid (zygote=0),
+          #       正合 ksu_handle_setresuid 的 "cur_uid != 0 就早退" 保护。
+          if grep -rq --include='*.c' --include='*.h' "ksu_handle_setresuid" drivers/kernelsu/ 2>/dev/null; then
+            sed -i '/^SYSCALL_DEFINE3(setresuid, uid_t, ruid, uid_t, euid, uid_t, suid)/i\#ifdef CONFIG_KSU\nextern int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid);\n#endif\n' kernel/sys.c
+            sed -i '/kuid_t kruid, keuid, ksuid;/a\#ifdef CONFIG_KSU\n\t(void)ksu_handle_setresuid(ruid, euid, suid);\n#endif\n' kernel/sys.c
+            SRC_CNT=$(grep -c "ksu_handle_setresuid" kernel/sys.c || true)
+            echo "[*] 5i: kernel/sys.c setresuid hook count=$SRC_CNT"
+            if [ "$SRC_CNT" -lt 2 ]; then
+              echo "[-] FATAL: 5i setresuid hook injection failed (count=$SRC_CNT) - abort to avoid a silent broken build"
+              exit 1
+            fi
+            sed -n '583,597p' kernel/sys.c
           else
-            echo "[!] WARN: 5h could not locate throne_tracker.c"
+            echo "[-] FATAL: 5i ksu_handle_setresuid not found in drivers/kernelsu (SUSFS disabled? check CONFIG_KSU_SUSFS)"
+            exit 1
           fi
 
-          echo "[+] KSU 4.9 fixes applied: current_sid export + KSU_COMPAT_USE_STATIC_KEY + selinux_hide prototypes + 4.9 stubs + no __read_mostly + 5h probes"
+          echo "[+] KSU 4.9 fixes applied: current_sid export + KSU_COMPAT_USE_STATIC_KEY + selinux_hide prototypes + 4.9 stubs + no __read_mostly + 5i setresuid hook"
 
           # ---- 6. 版本字符串: 不写 .scmversion ----
           #     官方内核 vermagic = 4.9.337-perf+ 的 "+" 来自编译时 dirty tree
