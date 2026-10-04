@@ -396,7 +396,20 @@ jobs:
           PYEOF
           grep -n -B2 -A6 'sys_setresuid:' kernel/sys.c
 
-          echo "[+] KSU 4.9 fixes applied: current_sid export + KSU_COMPAT_USE_STATIC_KEY + selinux_hide prototypes + 4.9 stubs + no __read_mostly + 5i setresuid hook + 5j manager fastpath + 5k sys.c probe"
+          # 5l. 版本对齐: builtin 分支 HEAD 的 KSU_VERSION 由 kernel/Makefile 用
+          #     (VERSION_BASE + git 提交数 - OFFSET) 算出 (=40940), 而设备上官方
+          #     管理器 APK 是 v4.2.0 (versionCode 40900) -> 首页红条告警
+          #     "管理器版本 (40900) 与 KernelSU 驱动版本 (40940) 不匹配!"。
+          #     直接把 KSU_VERSION 固定为 40900 消除该告警(KSU_VERSION_FULL 不动)。
+          KMAKE=drivers/kernelsu/kernel/Makefile
+          grep -n '^KSU_VERSION' "$KMAKE"
+          sed -i 's|^KSU_VERSION[[:space:]]*:=.*|KSU_VERSION     := 40900|' "$KMAKE"
+          grep -n '^KSU_VERSION' "$KMAKE"
+          test "$(grep -c '^KSU_VERSION[[:space:]]*:= 40900$' "$KMAKE")" = "1" || { echo "[-] 5l failed: KSU_VERSION not pinned"; exit 1; }
+          grep -n '^KSU_VERSION_FULL' "$KMAKE"
+          echo "[*] 5l: KSU_VERSION pinned to 40900 (matches manager v4.2.0 / 40900)"
+
+          echo "[+] KSU 4.9 fixes applied: current_sid export + KSU_COMPAT_USE_STATIC_KEY + selinux_hide prototypes + 4.9 stubs + no __read_mostly + 5i setresuid hook + 5j manager fastpath + 5k sys.c probe + 5l KSU_VERSION=40900"
 
           # ---- 6. 版本字符串: 不写 .scmversion ----
           #     官方内核 vermagic = 4.9.337-perf+ 的 "+" 来自编译时 dirty tree
