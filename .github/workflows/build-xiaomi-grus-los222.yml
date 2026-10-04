@@ -226,30 +226,29 @@ jobs:
           sed -i 's/static inline u32 current_sid(void)/u32 current_sid(void)/' security/selinux/hooks.c
           grep -q "EXPORT_SYMBOL(current_sid);" security/selinux/hooks.c || printf '\nEXPORT_SYMBOL(current_sid);\n' >> security/selinux/hooks.c
 
-          # 5c. KSU 侧 current_sid 无声明: kernel/selinux/selinux.c 直接调用
-          #     current_sid() (susfs_get_current_sid 等), 但 KSU 未声明它
-          #     (objsec.h 无 current_sid(void) -> KSU_COMPAT_HAS_CURRENT_SID 未定义)。
-          #     在该文件顶部补 extern 声明。
-          KSU_SELINUX=drivers/kernelsu/kernel/selinux/selinux.c
-          if [ -f "$KSU_SELINUX" ]; then
-            grep -q "extern u32 current_sid" "$KSU_SELINUX" || sed -i '1i extern u32 current_sid(void);' "$KSU_SELINUX"
-            echo "[+] added extern current_sid to $KSU_SELINUX"
-          else
-            echo "[!] WARN: $KSU_SELINUX not found, skip 5c"
-          fi
-
-          # 5d. ksud.c 调用 ksu_selinux_hide_* 但不 include selinux_hide.h
-          #     (原型在 .h 里无条件声明, 但调用方看不到) -> implicit declaration。
-          #     直接在该文件顶部补与 selinux_hide.h 一致的函数原型。
-          KSU_KSUD=drivers/kernelsu/kernel/runtime/ksud.c
-          if [ -f "$KSU_KSUD" ]; then
-            if ! grep -q "ksu_selinux_hide_handle_second_stage(void)" "$KSU_KSUD"; then
-              sed -i '1i void ksu_selinux_hide_handle_second_stage(void); void ksu_selinux_hide_handle_post_fs_data(void); void ksu_selinux_hide_drop_backup_if_unused(void); void ksu_selinux_hide_init(void); void ksu_selinux_hide_exit(void);' "$KSU_KSUD"
-              echo "[+] added selinux_hide prototypes to $KSU_KSUD"
+          # 5c. KSU 侧 current_sid 无声明: 各 KSU .c 直接调用 current_sid(),
+          #     但内核 security.h/objsec.h 都不声明它 (4.9 仅 static inline 在
+          #     hooks.c, KSU_COMPAT_HAS_CURRENT_SID 因此未定义) -> implicit declaration。
+          #     ⚠️ 上一轮硬编码 drivers/kernelsu/kernel/selinux/selinux.c 多了一层
+          #     kernel/ (实际路径无此层), [ -f ] 为 false 直接跳过, 原型没注入。
+          #     改为 grep -rl 自动定位所有引用文件, 顶部补 extern (不依赖路径)。
+          grep -rl "current_sid" drivers/kernelsu --include='*.c' 2>/dev/null | while read -r f; do
+            if ! grep -q "extern u32 current_sid" "$f"; then
+              sed -i '1i extern u32 current_sid(void);' "$f"
+              echo "[+] extern current_sid -> $f"
             fi
-          else
-            echo "[!] WARN: $KSU_KSUD not found, skip 5d"
-          fi
+          done
+
+          # 5d. ksud.c 调用 ksu_selinux_hide_* 系列但不 include selinux_hide.h
+          #     (原型在 .h 里被 #ifdef KSU_COMPAT_USE_STATIC_KEY 守卫, 调用方看不到)
+          #     -> implicit declaration。同样用 grep -rl 自动定位, 顶部补原型。
+          PROTOS='void ksu_selinux_hide_handle_second_stage(void); void ksu_selinux_hide_handle_post_fs_data(void); void ksu_selinux_hide_drop_backup_if_unused(void); void ksu_selinux_hide_init(void); void ksu_selinux_hide_exit(void);'
+          grep -rl "ksu_selinux_hide_handle" drivers/kernelsu --include='*.c' 2>/dev/null | while read -r f; do
+            if ! grep -q "ksu_selinux_hide_handle_second_stage(void)" "$f"; then
+              sed -i "1i $PROTOS" "$f"
+              echo "[+] selinux_hide prototypes -> $f"
+            fi
+          done
 
           echo "[+] KSU 4.9 fixes applied: current_sid export + KSU_COMPAT_USE_STATIC_KEY + selinux_hide prototypes"
 
