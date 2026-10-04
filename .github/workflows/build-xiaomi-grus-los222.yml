@@ -347,7 +347,7 @@ jobs:
           import sys
           p = sys.argv[1]
           s = open(p).read()
-          anchor = "    if (cur_uid != 0)\n        return 0;\n"
+          anchor = "int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid)\n{\n    uid_t cur_uid = current_uid().val;\n"
           assert s.count(anchor) == 1, ("anchor count", s.count(anchor))
           add = (
               '    pr_info("ksu_setresuid: ruid=%d cur=%d sid=%u zygote=%u next=%u\\n",\n'
@@ -365,9 +365,28 @@ jobs:
           print("[*] 5j patched", p, "len", len(s), "fastpath_count", k)
           assert k == 1
           PYEOF
-          grep -n -A9 "int ksu_handle_setresuid" "$LSM" | head -20
+          grep -n -A12 "int ksu_handle_setresuid" "$LSM" | head -26
 
-          echo "[+] KSU 4.9 fixes applied: current_sid export + KSU_COMPAT_USE_STATIC_KEY + selinux_hide prototypes + 4.9 stubs + no __read_mostly + 5i setresuid hook + 5j manager fastpath"
+          # 5k. 诊断: SYSCALL_DEFINE3(setresuid) 是否真的在 app 特化时被调到,
+          #     ruid/euid/suid 各是多少 (只看 u0_aXX 段, 避免 init/adbd 噪音)。
+          #     注: kernel/sys.c:587-591 的声明块以 "kuid_t kruid, keuid, ksuid;" 结束,
+          #     故插在其后是"声明之后"的语句位置, 不会触发 -Wdeclaration-after-statement。
+          python3 - kernel/sys.c <<'PYEOF'
+          import sys
+          p = sys.argv[1]
+          s = open(p).read()
+          anchor = "\tkuid_t kruid, keuid, ksuid;\n"
+          assert s.count(anchor) == 1, ("decl anchor", s.count(anchor))
+          add = '\tif (ruid >= 10000 && ruid < 20000)\n\t\tpr_info("sys_setresuid: ruid=%d euid=%d suid=%d\\n", ruid, euid, suid);\n'
+          s = s.replace(anchor, anchor + add, 1)
+          open(p, "w").write(s)
+          k = s.count('sys_setresuid:')
+          print("[*] 5k patched", p, "count", k)
+          assert k == 1
+          PYEOF
+          grep -n -B2 -A6 'sys_setresuid:' kernel/sys.c
+
+          echo "[+] KSU 4.9 fixes applied: current_sid export + KSU_COMPAT_USE_STATIC_KEY + selinux_hide prototypes + 4.9 stubs + no __read_mostly + 5i setresuid hook + 5j manager fastpath + 5k sys.c probe"
 
           # ---- 6. 版本字符串: 不写 .scmversion ----
           #     官方内核 vermagic = 4.9.337-perf+ 的 "+" 来自编译时 dirty tree
